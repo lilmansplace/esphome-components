@@ -4,11 +4,13 @@ from esphome.components import i2c, sensor
 from esphome.const import CONF_ID, UNIT_HERTZ, DEVICE_CLASS_FREQUENCY
 from esphome import pins
 
-CODEOWNERS = ["@pryorda"]  # Updated GitHub username
+CODEOWNERS = ["@lilmansplace"]  # Optional: Replace with your GitHub username
 
 # Add reset pin configuration constant
 CONF_RESET_PIN = "reset_pin"
 CONF_FREQUENCY_SENSOR = "frequency_sensor"
+
+DEPENDENCIES = ["i2c"]
 
 # Namespace for the component's C++ code
 si4703_ns = cg.esphome_ns.namespace("si4703")
