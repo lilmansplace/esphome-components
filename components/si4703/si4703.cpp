@@ -177,7 +177,6 @@ void Si4703Component::set_frequency(float frequency) {
   }
 
   // Calculate channel value assuming US/Europe band (starts 87.5MHz) and 100kHz spacing
-  // TODO: Make band and spacing configurable
   // Channel spacing = 0.1 MHz (100kHz)
   // Bottom of band = 87.5 MHz
   uint16_t channel = static_cast<uint16_t>((frequency - 87.5f) / 0.1f);
@@ -230,19 +229,18 @@ void Si4703Component::set_frequency(float frequency) {
     ESP_LOGE(TAG, "Failed to write registers to clear TUNE bit");
   }
 
+  // Update internal tracking of frequency even if read fails
+  this->current_frequency_ = frequency;
+  
   // Read final status to update internal state
-  if (this->read_registers_()) {
-      // this->update_internal_state_(); // Update current_frequency_, etc. -> Now called within read_registers_()
-  } else {
+  if (!this->read_registers_()) {
       ESP_LOGW(TAG, "Failed to read final registers after tuning");
-      // Set frequency optimistically
-      this->current_frequency_ = frequency;
-  }
-
-  // At the end of the method, after successfully setting frequency
-  if (this->frequency_sensor_ != nullptr) {
-    float frequency_hz = frequency * 1000000.0f;
-    this->frequency_sensor_->publish_state(frequency_hz);
+      
+      // Force update of the frequency sensor
+      if (this->frequency_sensor_ != nullptr) {
+        float frequency_hz = frequency * 1000000.0f;
+        this->frequency_sensor_->publish_state(frequency_hz);
+      }
   }
 }
 
@@ -259,16 +257,19 @@ void Si4703Component::update_internal_state_() {
     // Update mono status based on POWERCFG
     this->current_mono_ = (this->registers_[SI4703_REG_POWERCFG] & SI4703_BIT_MONO) != 0;
 
-    // Update mute status based on POWERCFG
-    this->muted_ = (this->registers_[SI4703_REG_POWERCFG] & SI4703_BIT_DMUTE) != 0;
+    // Update mute status based on POWERCFG - DMUTE means "disable mute" when set
+    this->muted_ = (this->registers_[SI4703_REG_POWERCFG] & SI4703_BIT_DMUTE) == 0;
 
     ESP_LOGD(TAG, "Internal state updated: Freq=%.1fMHz, Vol=%d, Mono=%s, Muted=%s",
              this->current_frequency_, this->current_volume_,
              this->current_mono_ ? "true" : "false",
              this->muted_ ? "true" : "false");
 
-    // TODO: Publish state update to media player component if needed?
-    // The media player usually polls or gets told explicitly
+    // Update frequency sensor if available
+    if (this->frequency_sensor_ != nullptr) {
+        float frequency_hz = this->current_frequency_ * 1000000.0f; // Convert MHz to Hz
+        this->frequency_sensor_->publish_state(frequency_hz);
+    }
 }
 
 void Si4703Component::set_volume(uint8_t volume) {
