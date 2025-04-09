@@ -4,7 +4,7 @@ from esphome.components import i2c, sensor
 from esphome.const import CONF_ID, UNIT_HERTZ, DEVICE_CLASS_FREQUENCY
 from esphome import pins
 
-CODEOWNERS = ["@your-github-username"]  # Optional: Replace with your GitHub username
+CODEOWNERS = ["@lilmansplace"]  # Optional: Replace with your GitHub username
 
 # Add reset pin configuration constant
 CONF_RESET_PIN = "reset_pin"
@@ -48,5 +48,8 @@ async def to_code(config):
     if CONF_FREQUENCY_SENSOR in config:
         sens = await sensor.new_sensor(config[CONF_FREQUENCY_SENSOR])
         cg.add(var.set_frequency_sensor(sens))
+
+    # We need to add the preferences component when using our component
+    cg.add_library("Preferences", None)
 
     # Add C++ code generation for specific configuration options here later 

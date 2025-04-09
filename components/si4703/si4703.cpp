@@ -40,8 +40,100 @@ static const uint16_t SI4703_BIT_SEEKUP = 1 << 9;    // POWERCFG Seek Direction 
 
 float Si4703Component::get_setup_priority() const { return setup_priority::DATA; }
 
+void Si4703Component::init_preferences_() {
+  if (this->preferences_initialized_)
+    return;
+  
+  // Create unique key for this device
+  char key[16];
+  sprintf(key, "si4703_%02x", this->address_);
+  
+  // Initialize preferences with the component key
+  this->pref_ = preferences::global_preferences->make_preference<uint32_t>(fnv1_hash(key));
+  this->preferences_initialized_ = true;
+  
+  ESP_LOGD(TAG, "Initialized preferences with key '%s'", key);
+}
+
+void Si4703Component::load_preferences_() {
+  this->init_preferences_();
+  
+  // Structure to hold all settings in 32-bit format
+  struct {
+    // Pack frequency as an integer (multiply by 10 to preserve 1 decimal place)
+    uint16_t frequency_x10;
+    // Pack volume (4 bits), mono flag (1 bit), and muted flag (1 bit)
+    uint8_t volume_and_flags;
+    // Reserved for future use
+    uint8_t reserved;
+  } settings{0};
+  
+  if (this->pref_.load(&settings)) {
+    // Restore frequency (convert back to float)
+    this->current_frequency_ = settings.frequency_x10 / 10.0f;
+    
+    // Restore volume (lower 4 bits)
+    this->current_volume_ = settings.volume_and_flags & 0x0F;
+    
+    // Restore mono flag (bit 5)
+    this->current_mono_ = (settings.volume_and_flags & (1 << 4)) != 0;
+    
+    // Restore muted flag (bit 6)
+    this->muted_ = (settings.volume_and_flags & (1 << 5)) != 0;
+    
+    ESP_LOGD(TAG, "Loaded settings from preferences: Freq=%.1f MHz, Vol=%d, Mono=%s, Muted=%s",
+            this->current_frequency_, this->current_volume_,
+            this->current_mono_ ? "yes" : "no",
+            this->muted_ ? "yes" : "no");
+  } else {
+    ESP_LOGD(TAG, "No saved preferences found, using defaults");
+  }
+}
+
+void Si4703Component::save_preferences_() {
+  if (!this->preferences_initialized_)
+    this->init_preferences_();
+  
+  // Structure to hold all settings in 32-bit format
+  struct {
+    // Pack frequency as an integer (multiply by 10 to preserve 1 decimal place)
+    uint16_t frequency_x10;
+    // Pack volume (4 bits), mono flag (1 bit), and muted flag (1 bit)
+    uint8_t volume_and_flags;
+    // Reserved for future use
+    uint8_t reserved;
+  } settings{0};
+  
+  // Save frequency (as integer, multiply by 10 to keep 1 decimal place)
+  settings.frequency_x10 = static_cast<uint16_t>(this->current_frequency_ * 10.0f);
+  
+  // Save volume (lower 4 bits)
+  settings.volume_and_flags = this->current_volume_ & 0x0F;
+  
+  // Save mono flag (bit 5)
+  if (this->current_mono_)
+    settings.volume_and_flags |= (1 << 4);
+  
+  // Save muted flag (bit 6)
+  if (this->muted_)
+    settings.volume_and_flags |= (1 << 5);
+  
+  // Save the settings to flash
+  if (this->pref_.save(&settings)) {
+    ESP_LOGD(TAG, "Saved settings to preferences: Freq=%.1f MHz, Vol=%d, Mono=%s, Muted=%s",
+            this->current_frequency_, this->current_volume_,
+            this->current_mono_ ? "yes" : "no",
+            this->muted_ ? "yes" : "no");
+  } else {
+    ESP_LOGW(TAG, "Failed to save settings to preferences");
+  }
+}
+
 void Si4703Component::setup() {
   ESP_LOGCONFIG(TAG, "Setting up Si4703...");
+  
+  // Load saved settings
+  this->load_preferences_();
   
   // Perform hardware reset if reset pin is configured
   if (this->reset_pin_ != nullptr) {
@@ -64,7 +156,20 @@ void Si4703Component::setup() {
   // Power on
   this->registers_[SI4703_REG_POWERCFG] &= ~SI4703_BIT_DISABLE; // Clear disable bit
   this->registers_[SI4703_REG_POWERCFG] |= SI4703_BIT_ENABLE;   // Set enable bit
-  // Add other power-on settings if needed
+  
+  // Set initial configurations from loaded preferences
+  if (this->current_mono_) {
+    this->registers_[SI4703_REG_POWERCFG] |= SI4703_BIT_MONO;   // Set MONO bit
+  } else {
+    this->registers_[SI4703_REG_POWERCFG] &= ~SI4703_BIT_MONO;  // Clear MONO bit
+  }
+  
+  if (!this->muted_) {
+    this->registers_[SI4703_REG_POWERCFG] |= SI4703_BIT_DMUTE;  // Set DMUTE bit to disable muting
+  } else {
+    this->registers_[SI4703_REG_POWERCFG] &= ~SI4703_BIT_DMUTE; // Clear DMUTE bit to enable muting
+  }
+  
   if (!this->write_registers_()) {
      ESP_LOGE(TAG, "Failed to power on Si4703");
      this->mark_failed();
@@ -72,7 +177,7 @@ void Si4703Component::setup() {
   }
 
   // Wait for power-up (refer to datasheet, usually ~110ms for oscillator)
-  esphome::delay(110); // Use esphome::delay instead of delay
+  esphome::delay(110);
 
   // Read status after power up
   if (!this->read_registers_()) {
@@ -80,13 +185,13 @@ void Si4703Component::setup() {
       // Might not be fatal, continue setup
   }
 
-  // Set initial configurations (Example: Volume, Band, De-emphasis)
-  this->registers_[SI4703_REG_SYSCONFIG1] |= (1 << 11); // Set RDS enable
-  this->registers_[SI4703_REG_SYSCONFIG1] |= (1 << 10); // Set DE (De-emphasis) - 50us for Europe/Australia
-                                                   // Clear for 75us (USA)
-  this->registers_[SI4703_REG_SYSCONFIG2] &= 0xFFF0;    // Clear Volume bits
-  this->registers_[SI4703_REG_SYSCONFIG2] |= 1;         // Set Volume to 1 (lowest audible)
-  this->current_volume_ = 1;
+  // Set initial volume from preferences
+  this->registers_[SI4703_REG_SYSCONFIG1] |= SI4703_BIT_RDS;    // Set RDS enable
+  this->registers_[SI4703_REG_SYSCONFIG1] |= SI4703_BIT_DE_50;  // Set DE (De-emphasis) - 50us for Europe/Australia
+  
+  // Clear and set volume bits
+  this->registers_[SI4703_REG_SYSCONFIG2] &= 0xFFF0;            // Clear Volume bits
+  this->registers_[SI4703_REG_SYSCONFIG2] |= (this->current_volume_ & 0x0F); // Set Volume from preferences
 
   if (!this->write_registers_()) {
       ESP_LOGW(TAG, "Failed to set initial configuration");
@@ -95,6 +200,16 @@ void Si4703Component::setup() {
   // Register a 5-second update callback for sensors
   if (this->frequency_sensor_ != nullptr) {
     this->set_interval("update", 5000, [this]() { this->update(); });
+  }
+  
+  // Set tuner to the saved frequency
+  if (this->current_frequency_ >= 87.5f && this->current_frequency_ <= 108.0f) {
+    ESP_LOGD(TAG, "Setting tuner to saved frequency: %.1f MHz", this->current_frequency_);
+    this->set_frequency(this->current_frequency_);
+  } else {
+    // Default to 87.5 if saved frequency is invalid
+    ESP_LOGD(TAG, "Using default frequency: 87.5 MHz");
+    this->set_frequency(87.5f);
   }
 
   ESP_LOGCONFIG(TAG, "Si4703 Setup Complete.");
@@ -335,6 +450,9 @@ void Si4703Component::set_frequency(float frequency) {
     float frequency_hz = frequency * 1000000.0f;
     this->frequency_sensor_->publish_state(frequency_hz);
   }
+
+  // Save the settings to preferences
+  this->save_preferences_();
 }
 
 // Add a helper function to update internal state from registers_
@@ -393,6 +511,9 @@ void Si4703Component::set_volume(uint8_t volume) {
   if (!this->write_registers_()) {
     ESP_LOGE(TAG, "Failed to write registers for setting volume");
   }
+
+  // Save the settings to preferences
+  this->save_preferences_();
 }
 
 void Si4703Component::seek_up() {
@@ -449,6 +570,9 @@ void Si4703Component::seek_up() {
   }
 
   // TODO: Maybe check the SF/BL bit (Seek Fail/Band Limit) in STATUSRSSI?
+
+  // Save the settings to preferences
+  this->save_preferences_();
 }
 
 void Si4703Component::seek_down() {
@@ -502,6 +626,9 @@ void Si4703Component::seek_down() {
   if (!this->write_registers_()) {
     ESP_LOGE(TAG, "Failed to write registers to clear SEEK bit after seek down");
   }
+
+  // Save the settings to preferences
+  this->save_preferences_();
 }
 
 void Si4703Component::set_mono(bool mono) {
@@ -521,6 +648,9 @@ void Si4703Component::set_mono(bool mono) {
   if (!this->write_registers_()) {
     ESP_LOGE(TAG, "Failed to write registers for setting mono");
   }
+
+  // Save the settings to preferences
+  this->save_preferences_();
 }
 
 void Si4703Component::mute() {
@@ -537,6 +667,9 @@ void Si4703Component::mute() {
   if (!this->write_registers_()) {
     ESP_LOGE(TAG, "Failed to write registers for muting");
   }
+
+  // Save the settings to preferences
+  this->save_preferences_();
 }
 
 void Si4703Component::unmute() {
@@ -561,6 +694,9 @@ void Si4703Component::unmute() {
       ESP_LOGE(TAG, "Failed to write registers for unmuting");
     }
   }
+
+  // Save the settings to preferences
+  this->save_preferences_();
 }
 
 // Add this method to implement the reset sequence
