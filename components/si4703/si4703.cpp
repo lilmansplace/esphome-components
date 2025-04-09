@@ -44,89 +44,77 @@ void Si4703Component::init_preferences_() {
   if (this->preferences_initialized_)
     return;
   
-  // Create unique key for this device
-  char key[16];
-  sprintf(key, "si4703_%02x", this->address_);
+#ifdef USE_ESP32
+  // Create namespace for this device
+  char ns[16];
+  sprintf(ns, "si4703_%02x", this->address_);
   
-  // Initialize preferences with the component key
-  this->pref_ = preferences::global_preferences->make_preference<uint32_t>(fnv1_hash(key));
-  this->preferences_initialized_ = true;
-  
-  ESP_LOGD(TAG, "Initialized preferences with key '%s'", key);
+  // Open preferences with read/write mode
+  if (this->esp_preferences_.begin(ns, false)) {
+    this->preferences_initialized_ = true;
+    ESP_LOGD(TAG, "Initialized ESP32 preferences with namespace '%s'", ns);
+  } else {
+    ESP_LOGW(TAG, "Failed to initialize ESP32 preferences");
+  }
+#else
+  ESP_LOGW(TAG, "Preferences not supported on this platform");
+#endif
 }
 
 void Si4703Component::load_preferences_() {
   this->init_preferences_();
   
-  // Structure to hold all settings in 32-bit format
-  struct {
-    // Pack frequency as an integer (multiply by 10 to preserve 1 decimal place)
-    uint16_t frequency_x10;
-    // Pack volume (4 bits), mono flag (1 bit), and muted flag (1 bit)
-    uint8_t volume_and_flags;
-    // Reserved for future use
-    uint8_t reserved;
-  } settings{0};
-  
-  if (this->pref_.load(&settings)) {
-    // Restore frequency (convert back to float)
-    this->current_frequency_ = settings.frequency_x10 / 10.0f;
+#ifdef USE_ESP32
+  if (this->preferences_initialized_) {
+    // Load frequency (in tenths of MHz for better precision)
+    uint16_t freq_x10 = this->esp_preferences_.getUShort("freq", 875); // Default 87.5 MHz
+    this->current_frequency_ = freq_x10 / 10.0f;
     
-    // Restore volume (lower 4 bits)
-    this->current_volume_ = settings.volume_and_flags & 0x0F;
+    // Load volume (0-15)
+    this->current_volume_ = this->esp_preferences_.getUChar("vol", 1); // Default volume 1
     
-    // Restore mono flag (bit 5)
-    this->current_mono_ = (settings.volume_and_flags & (1 << 4)) != 0;
+    // Load flags (mono and muted in one byte)
+    uint8_t flags = this->esp_preferences_.getUChar("flags", 0);
+    this->current_mono_ = (flags & 0x01) != 0;
+    this->muted_ = (flags & 0x02) != 0;
     
-    // Restore muted flag (bit 6)
-    this->muted_ = (settings.volume_and_flags & (1 << 5)) != 0;
-    
-    ESP_LOGD(TAG, "Loaded settings from preferences: Freq=%.1f MHz, Vol=%d, Mono=%s, Muted=%s",
+    ESP_LOGD(TAG, "Loaded settings from ESP32 preferences: Freq=%.1f MHz, Vol=%d, Mono=%s, Muted=%s",
             this->current_frequency_, this->current_volume_,
             this->current_mono_ ? "yes" : "no",
             this->muted_ ? "yes" : "no");
   } else {
-    ESP_LOGD(TAG, "No saved preferences found, using defaults");
+    ESP_LOGD(TAG, "No ESP32 preferences available, using defaults");
   }
+#endif
 }
 
 void Si4703Component::save_preferences_() {
+#ifdef USE_ESP32
   if (!this->preferences_initialized_)
     this->init_preferences_();
   
-  // Structure to hold all settings in 32-bit format
-  struct {
-    // Pack frequency as an integer (multiply by 10 to preserve 1 decimal place)
-    uint16_t frequency_x10;
-    // Pack volume (4 bits), mono flag (1 bit), and muted flag (1 bit)
-    uint8_t volume_and_flags;
-    // Reserved for future use
-    uint8_t reserved;
-  } settings{0};
-  
-  // Save frequency (as integer, multiply by 10 to keep 1 decimal place)
-  settings.frequency_x10 = static_cast<uint16_t>(this->current_frequency_ * 10.0f);
-  
-  // Save volume (lower 4 bits)
-  settings.volume_and_flags = this->current_volume_ & 0x0F;
-  
-  // Save mono flag (bit 5)
-  if (this->current_mono_)
-    settings.volume_and_flags |= (1 << 4);
-  
-  // Save muted flag (bit 6)
-  if (this->muted_)
-    settings.volume_and_flags |= (1 << 5);
-  
-  // Save the settings to flash
-  if (this->pref_.save(&settings)) {
-    ESP_LOGD(TAG, "Saved settings to preferences: Freq=%.1f MHz, Vol=%d, Mono=%s, Muted=%s",
+  if (this->preferences_initialized_) {
+    // Save frequency (as tenths of MHz for better precision)
+    uint16_t freq_x10 = static_cast<uint16_t>(this->current_frequency_ * 10.0f);
+    this->esp_preferences_.putUShort("freq", freq_x10);
+    
+    // Save volume
+    this->esp_preferences_.putUChar("vol", this->current_volume_);
+    
+    // Save flags (mono and muted in one byte)
+    uint8_t flags = 0;
+    if (this->current_mono_) flags |= 0x01;
+    if (this->muted_) flags |= 0x02;
+    this->esp_preferences_.putUChar("flags", flags);
+    
+    ESP_LOGD(TAG, "Saved settings to ESP32 preferences: Freq=%.1f MHz, Vol=%d, Mono=%s, Muted=%s",
             this->current_frequency_, this->current_volume_,
             this->current_mono_ ? "yes" : "no",
             this->muted_ ? "yes" : "no");
   } else {
-    ESP_LOGW(TAG, "Failed to save settings to preferences");
+    ESP_LOGW(TAG, "Failed to save settings to ESP32 preferences");
   }
+#endif
 }
 
 void Si4703Component::setup() {

@@ -4,7 +4,9 @@
 #include "esphome/components/i2c/i2c.h"
 #include "esphome/core/gpio.h"
 #include "esphome/components/sensor/sensor.h"
-#include "esphome/components/preferences/preferences.h"
+#ifdef USE_ESP32
+#include <Preferences.h>
+#endif
 
 namespace esphome {
 namespace si4703 {
@@ -82,8 +84,10 @@ class Si4703Component : public Component, public i2c::I2CDevice {
   // Storage for chip registers (16 registers, each 16-bit)
   uint16_t registers_[16]{0};
   
-  // Preferences for saving settings
-  preferences::Preferences pref_;
+  // Native ESP32 preferences
+#ifdef USE_ESP32
+  Preferences esp_preferences_;
+#endif
   bool preferences_initialized_{false};
 };
 
