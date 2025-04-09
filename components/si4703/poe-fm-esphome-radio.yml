@@ -43,9 +43,49 @@ si4703:
   id: fm_radio_chip
   #reset_pin: GPIO15
   #address: 0x11 # Optional: Uncomment if your device uses a non-default address
+  # Add frequency sensor to display current frequency
+  frequency_sensor:
+    name: "Radio Frequency"
+    id: radio_freq
+    unit_of_measurement: "MHz"
 
 # Configure the media player using the Si4703 component
 media_player:
   - platform: si4703
     name: "POE FM Radio"
     si4703_id: fm_radio_chip
+
+# Add buttons to control frequency
+button:
+  # Button to seek up
+  - platform: template
+    name: "Radio Seek Up"
+    icon: "mdi:fast-forward"
+    on_press:
+      - lambda: |-
+          auto *si4703 = id(fm_radio_chip);
+          si4703->seek_up();
+
+  # Button to seek down
+  - platform: template
+    name: "Radio Seek Down"
+    icon: "mdi:rewind"
+    on_press:
+      - lambda: |-
+          auto *si4703 = id(fm_radio_chip);
+          si4703->seek_down();
+
+# Add number component to directly set frequency
+number:
+  - platform: template
+    name: "Radio Frequency Setter"
+    icon: "mdi:radio"
+    min_value: 87.5
+    max_value: 108.0
+    step: 0.1
+    unit_of_measurement: "MHz"
+    optimistic: true
+    on_value:
+      - lambda: |-
+          auto *si4703 = id(fm_radio_chip);
+          si4703->set_frequency(x);
