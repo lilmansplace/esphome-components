@@ -21,14 +21,16 @@ void Si4703MediaPlayer::dump_config() {
 media_player::MediaPlayerTraits Si4703MediaPlayer::get_traits() {
   auto traits = media_player::MediaPlayerTraits();
   // Must be ON/OFF to receive PLAY/PAUSE commands
-  traits.set_supports_pause(true);
-  traits.set_supports_volume(true);
-  traits.set_supports_mute(true);
+  traits.set_supports_command(media_player::MEDIA_PLAYER_COMMAND_PAUSE);
+  traits.set_supports_command(media_player::MEDIA_PLAYER_COMMAND_PLAY);
+  traits.set_supports_command(media_player::MEDIA_PLAYER_COMMAND_MUTE);
+  traits.set_supports_command(media_player::MEDIA_PLAYER_COMMAND_UNMUTE);
+  traits.set_supports_command(media_player::MEDIA_PLAYER_COMMAND_VOLUME_SET);
   // Use NEXT/PREVIOUS TRACK for seeking
-  traits.set_supports_next_track(true);
-  traits.set_supports_previous_track(true);
+  traits.set_supports_command(media_player::MEDIA_PLAYER_COMMAND_NEXT_TRACK);
+  traits.set_supports_command(media_player::MEDIA_PLAYER_COMMAND_PREVIOUS_TRACK);
   // Use PLAY_MEDIA to set frequency
-  traits.set_supports_play_media(true);
+  traits.set_supports_command(media_player::MEDIA_PLAYER_COMMAND_PLAY_MEDIA);
   return traits;
 }
 
@@ -38,37 +40,37 @@ void Si4703MediaPlayer::control(const media_player::MediaPlayerCall &call) {
     return;
   }
 
-  if (call.get_media_command().has_value()) {
-    switch (call.get_media_command().value()) {
-      case media_player::MEDIA_COMMAND_PLAY:
+  if (call.get_command().has_value()) {
+    switch (call.get_command().value()) {
+      case media_player::MEDIA_PLAYER_COMMAND_PLAY:
         this->parent_->unmute(); // Or power on if applicable
         this->state = media_player::MEDIA_PLAYER_STATE_PLAYING;
         break;
-      case media_player::MEDIA_COMMAND_PAUSE:
+      case media_player::MEDIA_PLAYER_COMMAND_PAUSE:
         this->parent_->mute(); // Or power off if applicable
         this->state = media_player::MEDIA_PLAYER_STATE_PAUSED;
         break;
-      case media_player::MEDIA_COMMAND_MUTE:
+      case media_player::MEDIA_PLAYER_COMMAND_MUTE:
         this->parent_->mute();
-        this->muted_ = true;
+        this->muted = true;
         break;
-      case media_player::MEDIA_COMMAND_UNMUTE:
+      case media_player::MEDIA_PLAYER_COMMAND_UNMUTE:
         this->parent_->unmute();
-        this->muted_ = false;
+        this->muted = false;
         break;
-      case media_player::MEDIA_COMMAND_VOLUME_UP:
+      case media_player::MEDIA_PLAYER_COMMAND_VOLUME_UP:
         // Optional: Implement gradual volume up
         // this->parent_->set_volume(this->parent_->current_volume_ + 1);
         break;
-      case media_player::MEDIA_COMMAND_VOLUME_DOWN:
+      case media_player::MEDIA_PLAYER_COMMAND_VOLUME_DOWN:
         // Optional: Implement gradual volume down
         // this->parent_->set_volume(this->parent_->current_volume_ - 1);
         break;
-      case media_player::MEDIA_COMMAND_NEXT_TRACK:
+      case media_player::MEDIA_PLAYER_COMMAND_NEXT_TRACK:
         this->parent_->seek_up();
         this->state = media_player::MEDIA_PLAYER_STATE_PLAYING; // Assume seek starts playback
         break;
-      case media_player::MEDIA_COMMAND_PREVIOUS_TRACK:
+      case media_player::MEDIA_PLAYER_COMMAND_PREVIOUS_TRACK:
         this->parent_->seek_down();
         this->state = media_player::MEDIA_PLAYER_STATE_PLAYING; // Assume seek starts playback
         break;
@@ -84,7 +86,7 @@ void Si4703MediaPlayer::control(const media_player::MediaPlayerCall &call) {
     uint8_t si4703_volume = static_cast<uint8_t>(volume_level * 15.0f); // Scale 0.0-1.0 to 0-15
     this->parent_->set_volume(si4703_volume);
     this->volume = volume_level; // Update internal state
-    this->muted_ = (si4703_volume == 0);
+    this->muted = (si4703_volume == 0);
   }
 
   if (call.get_media_url().has_value()) {

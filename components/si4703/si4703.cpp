@@ -1,5 +1,6 @@
 #include "si4703.h"
 #include "esphome/core/log.h"
+#include "esphome/core/hal.h" // Include for esphome::delay
 
 namespace esphome {
 namespace si4703 {
@@ -63,7 +64,7 @@ void Si4703Component::setup() {
   }
 
   // Wait for power-up (refer to datasheet, usually ~110ms for oscillator)
-  delay(110); // TODO: Use non-blocking delay if possible
+  esphome::delay(110); // TODO: Use non-blocking delay if possible
 
   // Read status after power up
   if (!this->read_registers_()) {
@@ -186,7 +187,7 @@ void Si4703Component::set_frequency(float frequency) {
   int attempts = 0;
   const int max_attempts = 100; // Timeout after ~1 second (100 * 10ms)
   while (attempts < max_attempts) {
-    delay(10); // Small delay between checks - TODO: Use non-blocking delay/yield
+    esphome::delay(10); // Small delay between checks - TODO: Use non-blocking delay/yield
     if (!this->read_registers_()) {
         ESP_LOGW(TAG, "Failed to read registers while waiting for STC");
         // Continue waiting, maybe the next read will work
@@ -214,7 +215,7 @@ void Si4703Component::set_frequency(float frequency) {
 
   // Read final status to update internal state
   if (this->read_registers_()) {
-      this->update_internal_state_(); // Update current_frequency_, etc.
+      // this->update_internal_state_(); // Update current_frequency_, etc. -> Now called within read_registers_()
   } else {
       ESP_LOGW(TAG, "Failed to read final registers after tuning");
       // Set frequency optimistically
@@ -299,7 +300,7 @@ void Si4703Component::seek_up() {
   int attempts = 0;
   const int max_attempts = 500; // Seek can take longer, ~5 seconds timeout
   while (attempts < max_attempts) {
-    delay(10); // TODO: Use non-blocking delay/yield
+    esphome::delay(10); // TODO: Use non-blocking delay/yield
     if (!this->read_registers_()) {
         ESP_LOGW(TAG, "Failed to read registers while waiting for STC (seek)");
     } else {
@@ -355,7 +356,7 @@ void Si4703Component::seek_down() {
   int attempts = 0;
   const int max_attempts = 500; // ~5 seconds timeout
   while (attempts < max_attempts) {
-    delay(10); // TODO: Use non-blocking delay/yield
+    esphome::delay(10); // TODO: Use non-blocking delay/yield
     if (!this->read_registers_()) {
         ESP_LOGW(TAG, "Failed to read registers while waiting for STC (seek)");
     } else {

@@ -25,6 +25,7 @@ class Si4703Component : public Component, public i2c::I2CDevice {
   // Internal helper methods for I2C communication and chip control
   bool write_registers_();
   bool read_registers_();
+  void update_internal_state_();
 
   // Internal state variables
   uint16_t registers_[16]; // Si4703 has 16 registers (0x00 to 0x0F)

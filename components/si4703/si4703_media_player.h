@@ -12,7 +12,7 @@ class Si4703MediaPlayer : public media_player::MediaPlayer, public Component {
 
   void setup() override;
   void dump_config() override;
-  float get_setup_priority() const override { return setup_priority::APPLICATION; }
+  float get_setup_priority() const override { return setup_priority::LATE; }
 
   media_player::MediaPlayerTraits get_traits() override;
 
