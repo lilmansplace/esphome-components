@@ -460,22 +460,29 @@ void Si4703Component::unmute() {
 
 // Add this method to implement the reset sequence
 void Si4703Component::reset_device_() {
-  ESP_LOGD(TAG, "Performing hardware reset sequence");
+  ESP_LOGD(TAG, "Performing hardware reset sequence for Si4703");
   
   // Configure reset pin as output
   this->reset_pin_->setup();
   
-  // Reset sequence: Pull LOW for at least 1ms
-  this->reset_pin_->digital_write(false);
-  esphome::delay(10); // 10ms for safety
+  // Si4703 specific reset sequence
+  // 1. Ensure reset is HIGH initially
+  this->reset_pin_->digital_write(true);
+  esphome::delay(10);
   
-  // Release reset (HIGH)
+  // 2. Pull reset LOW for at least 1ms
+  this->reset_pin_->digital_write(false);
+  esphome::delay(50); // 50ms for more reliable reset
+  
+  // 3. Release reset (HIGH)
   this->reset_pin_->digital_write(true);
   
-  // Wait for oscillator to stabilize (datasheet recommends at least 1ms)
-  esphome::delay(100); // 100ms for safety
+  // 4. Critical delay for 2-wire interface initialization
+  // Per datasheet: wait at least 1ms for oscillator stabilization
+  // In practice, 500ms works much better for reliability
+  esphome::delay(500);
   
-  ESP_LOGD(TAG, "Hardware reset completed");
+  ESP_LOGD(TAG, "Hardware reset completed, Si4703 should now be ready for I2C communication");
 }
 
 } // namespace si4703

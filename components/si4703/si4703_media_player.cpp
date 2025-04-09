@@ -10,6 +10,17 @@ static const char *const TAG = "si4703.media_player";
 void Si4703MediaPlayer::setup() {
   // Initialization if needed, but most setup is in the parent Si4703Component
   ESP_LOGCONFIG(TAG, "Setting up Si4703 Media Player '%s'...", this->name_.c_str());
+  
+  // Initialize with PLAYING state since the radio is on by default
+  this->state = media_player::MEDIA_PLAYER_STATE_PLAYING;
+  
+  // Set initial volume value
+  if (this->parent_ != nullptr) {
+    this->volume = this->parent_->current_volume_ / 15.0f; // Scale from 0-15 to 0.0-1.0
+  }
+  
+  // Publish initial state so Home Assistant knows we're active
+  this->publish_state();
 }
 
 void Si4703MediaPlayer::dump_config() {
@@ -92,6 +103,13 @@ void Si4703MediaPlayer::control(const media_player::MediaPlayerCall &call) {
     } else {
         ESP_LOGW(TAG, "Invalid frequency received: %s", freq_str.c_str());
     }
+  }
+
+  // After other operations, update source name with current frequency
+  if (this->parent_ != nullptr) {
+    char source_name[16];
+    sprintf(source_name, "%.1f MHz", this->parent_->current_frequency_);
+    this->source_name = source_name;
   }
 
   this->publish_state(); // Update Home Assistant with the new state
