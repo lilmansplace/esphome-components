@@ -1,5 +1,5 @@
 esphome:
-  name: poe_fm_radio
+  name: poefmradio
   friendly_name: PoE FM Radio
 
 esp32:
@@ -34,14 +34,15 @@ external_components:
     refresh: 0s # Optional: Set to 0s to always fetch latest, or use a time interval
 
 i2c:
-  sda: GPIO16
-  scl: GPIO17
-  # scan: true # Optional: Uncomment to scan for I2C devices on boot
+  sda: GPIO4
+  scl: GPIO14
+  scan: true # Optional: Uncomment to scan for I2C devices on boot
 
 # Configure the base Si4703 component
 si4703:
   id: fm_radio_chip
-  # address: 0x10 # Optional: Uncomment if your device uses a non-default address
+  #reset_pin: GPIO15
+  #address: 0x11 # Optional: Uncomment if your device uses a non-default address
 
 # Configure the media player using the Si4703 component
 media_player:
