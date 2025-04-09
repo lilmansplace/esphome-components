@@ -16,7 +16,7 @@ void Si4703MediaPlayer::setup() {
   
   // Set initial volume value
   if (this->parent_ != nullptr) {
-    this->volume = this->parent_->current_volume_ / 15.0f; // Scale from 0-15 to 0.0-1.0
+    this->volume = this->parent_->get_volume() / 15.0f; // Scale from 0-15 to 0.0-1.0
   }
   
   // Publish initial state so Home Assistant knows we're active
@@ -105,11 +105,16 @@ void Si4703MediaPlayer::control(const media_player::MediaPlayerCall &call) {
     }
   }
 
-  // After other operations, update source name with current frequency
+  // After other operations, update media info with current frequency
   if (this->parent_ != nullptr) {
-    char source_name[16];
-    sprintf(source_name, "%.1f MHz", this->parent_->current_frequency_);
-    this->source_name = source_name;
+    char freq_str[16];
+    sprintf(freq_str, "%.1f MHz", this->parent_->get_frequency());
+    
+    // Set current frequency as the media title
+    this->media_title = freq_str;
+    
+    // Some FM radio implementations also need an artist field
+    this->media_artist = "FM Radio";
   }
 
   this->publish_state(); // Update Home Assistant with the new state

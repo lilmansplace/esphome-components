@@ -22,6 +22,12 @@ class Si4703Component : public Component, public i2c::I2CDevice {
   void mute();
   void unmute();
   
+  // Getter methods for media player
+  float get_frequency() const { return this->current_frequency_; }
+  uint8_t get_volume() const { return this->current_volume_; }
+  bool is_muted() const { return this->muted_; }
+  bool is_mono() const { return this->current_mono_; }
+  
   // Reset pin configuration
   void set_reset_pin(GPIOPin *reset_pin) { this->reset_pin_ = reset_pin; }
 
