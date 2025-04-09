@@ -105,16 +105,16 @@ void Si4703MediaPlayer::control(const media_player::MediaPlayerCall &call) {
     }
   }
 
-  // After other operations, update media info with current frequency
+  // After other operations, update frequency information
   if (this->parent_ != nullptr) {
     char freq_str[16];
     sprintf(freq_str, "%.1f MHz", this->parent_->get_frequency());
     
-    // Set current frequency as the media title
-    this->media_title = freq_str;
+    // Set station frequency in a way that will show in Home Assistant
+    this->source = freq_str;
     
-    // Some FM radio implementations also need an artist field
-    this->media_artist = "FM Radio";
+    // If the station is properly tuned, consider it playing
+    this->state = media_player::MEDIA_PLAYER_STATE_PLAYING;
   }
 
   this->publish_state(); // Update Home Assistant with the new state
