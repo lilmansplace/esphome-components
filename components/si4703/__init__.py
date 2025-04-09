@@ -1,7 +1,7 @@
 import esphome.codegen as cg
 import esphome.config_validation as cv
 from esphome.components import i2c, sensor
-from esphome.const import CONF_ID, UNIT_HERTZ, ICON_RADIO, DEVICE_CLASS_FREQUENCY
+from esphome.const import CONF_ID, UNIT_HERTZ, DEVICE_CLASS_FREQUENCY
 from esphome import pins
 
 CODEOWNERS = ["@your-github-username"]  # Optional: Replace with your GitHub username
@@ -24,7 +24,7 @@ CONFIG_SCHEMA = cv.Schema(
         # Add frequency sensor
         cv.Optional(CONF_FREQUENCY_SENSOR): sensor.sensor_schema(
             unit_of_measurement=UNIT_HERTZ,
-            icon=ICON_RADIO,
+            icon="mdi:radio",
             accuracy_decimals=1,
             device_class=DEVICE_CLASS_FREQUENCY,
         ),
