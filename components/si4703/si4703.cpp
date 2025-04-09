@@ -177,15 +177,38 @@ void Si4703Component::set_frequency(float frequency) {
   }
 
   // Calculate channel value assuming US/Europe band (starts 87.5MHz) and 100kHz spacing
-  // Channel spacing = 0.1 MHz (100kHz)
-  // Bottom of band = 87.5 MHz
   uint16_t channel = static_cast<uint16_t>((frequency - 87.5f) / 0.1f);
   ESP_LOGD(TAG, "Calculated channel value: %u for frequency %.1f MHz", channel, frequency);
 
+  // If we have a reset pin, do a soft reset to ensure the chip is in a known state
+  if (this->reset_pin_ != nullptr && this->current_frequency_ == 87.5f) {
+    ESP_LOGD(TAG, "Performing soft reset before first tuning operation");
+    this->reset_device_();
+    // Need to re-enable the device after reset
+    if (!this->read_registers_()) {
+      ESP_LOGW(TAG, "Failed to read registers after reset");
+    }
+    this->registers_[SI4703_REG_POWERCFG] &= ~SI4703_BIT_DISABLE; // Clear disable bit
+    this->registers_[SI4703_REG_POWERCFG] |= SI4703_BIT_ENABLE;   // Set enable bit
+    this->registers_[SI4703_REG_POWERCFG] |= SI4703_BIT_DMUTE;    // Set DMUTE to enable audio
+    
+    if (!this->write_registers_()) {
+      ESP_LOGW(TAG, "Failed to write registers after reset");
+    }
+    esphome::delay(110); // Wait for power-up
+  }
+
   // Read current registers
-  if (!this->read_registers_()) {
-    ESP_LOGW(TAG, "Failed to read registers before setting frequency");
-    // Attempt to continue with cached values, might fail
+  for (int retry = 0; retry < 3; retry++) {
+    if (this->read_registers_()) {
+      break;
+    }
+    ESP_LOGW(TAG, "Failed to read registers before setting frequency (attempt %d/3)", retry + 1);
+    esphome::delay(10);
+    if (retry == 2) {
+      ESP_LOGE(TAG, "Could not read registers, aborting frequency change");
+      return;
+    }
   }
 
   // Log the current state of relevant registers
@@ -201,79 +224,116 @@ void Si4703Component::set_frequency(float frequency) {
 
   ESP_LOGD(TAG, "After setting tuning bits - CHANNEL: 0x%04X", this->registers_[SI4703_REG_CHANNEL]);
 
-  // Make sure we're not in powerdown mode
+  // Ensure we're powered on
   this->registers_[SI4703_REG_POWERCFG] &= ~SI4703_BIT_DISABLE; // Clear disable bit
   this->registers_[SI4703_REG_POWERCFG] |= SI4703_BIT_ENABLE;   // Set enable bit 
 
-  // Write registers to start tuning
-  if (!this->write_registers_()) {
-    ESP_LOGE(TAG, "Failed to write registers to start tuning");
+  // Write registers to start tuning - retry up to 3 times
+  bool write_success = false;
+  for (int retry = 0; retry < 3; retry++) {
+    if (this->write_registers_()) {
+      write_success = true;
+      break;
+    }
+    ESP_LOGW(TAG, "Failed to write tuning registers (attempt %d/3)", retry + 1);
+    esphome::delay(10);
+  }
+
+  if (!write_success) {
+    ESP_LOGE(TAG, "Failed to write registers to start tuning after multiple attempts");
     return;
   }
 
   // Wait for the TUNE operation to complete by polling the STC bit
   ESP_LOGD(TAG, "Waiting for tune complete (STC bit)...");
   int attempts = 0;
-  const int max_attempts = 100; // Timeout after ~1 second (100 * 10ms)
+  const int max_attempts = 150; // Increase timeout to ~1.5 seconds (150 * 10ms)
   bool tune_complete = false;
   
   while (attempts < max_attempts) {
-    esphome::delay(10); // Use esphome::delay instead of delay
-    if (!this->read_registers_()) {
-        ESP_LOGW(TAG, "Failed to read registers while waiting for STC");
-        // Continue waiting, maybe the next read will work
-    } else {
-        if ((this->registers_[SI4703_REG_STATUSRSSI] & SI4703_BIT_STC) != 0) {
-            ESP_LOGD(TAG, "Tune complete (STC bit is set) after %d attempts", attempts);
-            tune_complete = true;
-            break; // Tune complete
-        }
+    esphome::delay(10);
+    
+    // Try to read registers - don't abort if it fails sometimes
+    bool read_ok = this->read_registers_();
+    
+    if (read_ok && (this->registers_[SI4703_REG_STATUSRSSI] & SI4703_BIT_STC) != 0) {
+      ESP_LOGD(TAG, "Tune complete (STC bit is set) after %d attempts", attempts);
+      tune_complete = true;
+      break;
     }
+    
     attempts++;
+    
+    // Every 10 attempts (100ms), log the register state for debugging
+    if (attempts % 10 == 0 && read_ok) {
+      ESP_LOGD(TAG, "Waiting for STC bit... STATUSRSSI: 0x%04X, READCHAN: 0x%04X (attempt %d/%d)",
+              this->registers_[SI4703_REG_STATUSRSSI], 
+              this->registers_[SI4703_REG_READCHAN],
+              attempts, max_attempts);
+    }
   }
 
   if (!tune_complete) {
-      ESP_LOGW(TAG, "Timeout waiting for tune completion (STC bit)");
-      // Try to clear TUNE bit anyway
+    ESP_LOGW(TAG, "Timeout waiting for tune completion (STC bit)");
   }
 
   // Log the current state after tuning
-  ESP_LOGD(TAG, "After tuning - CHANNEL: 0x%04X, READCHAN: 0x%04X, STATUSRSSI: 0x%04X", 
-           this->registers_[SI4703_REG_CHANNEL],
-           this->registers_[SI4703_REG_READCHAN],
-           this->registers_[SI4703_REG_STATUSRSSI]);
+  if (this->read_registers_()) {
+    ESP_LOGD(TAG, "After tuning - CHANNEL: 0x%04X, READCHAN: 0x%04X, STATUSRSSI: 0x%04X", 
+            this->registers_[SI4703_REG_CHANNEL],
+            this->registers_[SI4703_REG_READCHAN],
+            this->registers_[SI4703_REG_STATUSRSSI]);
+  }
 
   // Clear the TUNE bit (must be done after STC is set)
   this->registers_[SI4703_REG_CHANNEL] &= ~SI4703_BIT_TUNE;
 
-  // Write registers again to clear the TUNE bit
-  if (!this->write_registers_()) {
-    ESP_LOGE(TAG, "Failed to write registers to clear TUNE bit");
+  // Write registers again to clear the TUNE bit - retry if needed
+  write_success = false;
+  for (int retry = 0; retry < 3; retry++) {
+    if (this->write_registers_()) {
+      write_success = true;
+      break;
+    }
+    ESP_LOGW(TAG, "Failed to clear TUNE bit (attempt %d/3)", retry + 1);
+    esphome::delay(10);
   }
 
-  // Force update of internal tracking even if read fails
+  if (!write_success) {
+    ESP_LOGE(TAG, "Failed to clear TUNE bit after multiple attempts");
+  }
+
+  // Force update of internal tracking even if chip communication failed
   this->current_frequency_ = frequency;
   
+  // Wait a moment for the radio to settle
+  esphome::delay(50);
+  
   // Read final status to update internal state
-  if (!this->read_registers_()) {
-      ESP_LOGW(TAG, "Failed to read final registers after tuning");
+  if (this->read_registers_()) {
+    // Double-check if tuning was successful by checking READCHAN
+    uint16_t actual_channel = this->registers_[SI4703_REG_READCHAN] & 0x03FF;
+    float actual_freq = 87.5f + (static_cast<float>(actual_channel) * 0.1f);
+    ESP_LOGD(TAG, "Final channel value: %u (%.1f MHz), requested: %u (%.1f MHz)", 
+              actual_channel, actual_freq, channel, frequency);
       
-      // Force update of the frequency sensor
-      if (this->frequency_sensor_ != nullptr) {
-        float frequency_hz = frequency * 1000000.0f;
-        this->frequency_sensor_->publish_state(frequency_hz);
-      }
+    if (actual_channel != channel) {
+      ESP_LOGW(TAG, "Tuning mismatch! Requested: %.1f MHz, Actual: %.1f MHz", 
+              frequency, actual_freq);
+      
+      // If we consistently can't tune, we might have a deeper hardware issue
+      // For now, just update internal state to match the user's request
+      this->current_frequency_ = frequency;
+    }
   } else {
-      // Double-check if tuning was successful by checking READCHAN
-      uint16_t actual_channel = this->registers_[SI4703_REG_READCHAN] & 0x03FF;
-      float actual_freq = 87.5f + (static_cast<float>(actual_channel) * 0.1f);
-      ESP_LOGD(TAG, "Final channel value: %u (%.1f MHz), requested: %u (%.1f MHz)", 
-               actual_channel, actual_freq, channel, frequency);
-      
-      if (actual_channel != channel) {
-          ESP_LOGW(TAG, "Tuning mismatch! Requested: %.1f MHz, Actual: %.1f MHz", 
-                  frequency, actual_freq);
-      }
+    ESP_LOGW(TAG, "Failed to read final registers after tuning");
+  }
+  
+  // Always update the frequency sensor with what the user requested
+  // This ensures the UI stays consistent even if the hardware is having issues
+  if (this->frequency_sensor_ != nullptr) {
+    float frequency_hz = frequency * 1000000.0f;
+    this->frequency_sensor_->publish_state(frequency_hz);
   }
 }
 
@@ -510,22 +570,55 @@ void Si4703Component::reset_device_() {
   // Configure reset pin as output
   this->reset_pin_->setup();
   
-  // Si4703 specific reset sequence
-  // 1. Ensure reset is HIGH initially
-  this->reset_pin_->digital_write(true);
-  esphome::delay(10);
+  // Enhanced Si4703 reset sequence
+  // Power cycle sequence - the Si4703 can be very finicky
   
-  // 2. Pull reset LOW for at least 1ms
+  // 1. Set reset pin to LOW initially
   this->reset_pin_->digital_write(false);
-  esphome::delay(50); // 50ms for more reliable reset
+  esphome::delay(100); // Wait to ensure chip is in reset state
   
-  // 3. Release reset (HIGH)
+  // 2. Release reset (HIGH)
   this->reset_pin_->digital_write(true);
   
-  // 4. Critical delay for 2-wire interface initialization
-  // Per datasheet: wait at least 1ms for oscillator stabilization
-  // In practice, 500ms works much better for reliability
+  // 3. Critical delay for crystal oscillator startup and 2-wire interface initialization
+  // Per datasheet, at least 1ms is needed, but in practice much longer works better
   esphome::delay(500);
+  
+  // 4. Read initial registers (this will force I2C bus activity which helps initialize the chip)
+  // We don't actually care about the result, just want the bus traffic
+  if (!this->read_registers_()) {
+    ESP_LOGW(TAG, "First register read after reset failed (this is sometimes normal)");
+    // Wait and try again
+    esphome::delay(100);
+    if (this->read_registers_()) {
+      ESP_LOGD(TAG, "Second register read after reset succeeded");
+    } else {
+      ESP_LOGW(TAG, "Second register read after reset also failed");
+    }
+  } else {
+    ESP_LOGD(TAG, "Initial register read after reset succeeded");
+  }
+  
+  // Initialize with basic settings
+  // Zero all register values first to avoid garbage data
+  for (int i = 2; i <= 7; i++) {
+    this->registers_[i] = 0;
+  }
+  
+  // Basic configuration
+  this->registers_[SI4703_REG_POWERCFG] |= SI4703_BIT_ENABLE;   // Enable power
+  this->registers_[SI4703_REG_POWERCFG] |= SI4703_BIT_DMUTE;    // Disable mute
+  this->registers_[SI4703_REG_SYSCONFIG1] |= SI4703_BIT_RDS;    // Enable RDS
+  this->registers_[SI4703_REG_SYSCONFIG1] |= SI4703_BIT_DE_50;  // Set 50μs De-emphasis (Europe)
+  this->registers_[SI4703_REG_SYSCONFIG2] |= 9;                 // Set volume to mid level (9 out of 15)
+  
+  // Apply settings
+  if (!this->write_registers_()) {
+    ESP_LOGW(TAG, "Failed to write initial settings after reset");
+  }
+  
+  // Wait for power-up
+  esphome::delay(110);
   
   ESP_LOGD(TAG, "Hardware reset completed, Si4703 should now be ready for I2C communication");
 }
