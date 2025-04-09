@@ -42,6 +42,14 @@ float Si4703Component::get_setup_priority() const { return setup_priority::DATA;
 
 void Si4703Component::setup() {
   ESP_LOGCONFIG(TAG, "Setting up Si4703...");
+  
+  // Perform hardware reset if reset pin is configured
+  if (this->reset_pin_ != nullptr) {
+    this->reset_device_();
+  } else {
+    ESP_LOGW(TAG, "No reset pin configured. The Si4703 may not initialize properly.");
+  }
+
   // Basic initialization:
   // 1. Read initial registers
   // 2. Power up the chip
@@ -93,6 +101,10 @@ void Si4703Component::dump_config() {
   if (this->is_failed()) {
     ESP_LOGE(TAG, "Communication with Si4703 failed!");
   }
+  
+  // Log reset pin status
+  LOG_PIN("  Reset Pin: ", this->reset_pin_);
+  
   // Log current status if available
   ESP_LOGCONFIG(TAG, "  Current Frequency: %.1f MHz", this->current_frequency_);
   ESP_LOGCONFIG(TAG, "  Current Volume: %u", this->current_volume_);
@@ -444,6 +456,26 @@ void Si4703Component::unmute() {
         ESP_LOGE(TAG, "Failed to write registers for unmuting");
       }
   }
+}
+
+// Add this method to implement the reset sequence
+void Si4703Component::reset_device_() {
+  ESP_LOGD(TAG, "Performing hardware reset sequence");
+  
+  // Configure reset pin as output
+  this->reset_pin_->setup();
+  
+  // Reset sequence: Pull LOW for at least 1ms
+  this->reset_pin_->digital_write(false);
+  esphome::delay(10); // 10ms for safety
+  
+  // Release reset (HIGH)
+  this->reset_pin_->digital_write(true);
+  
+  // Wait for oscillator to stabilize (datasheet recommends at least 1ms)
+  esphome::delay(100); // 100ms for safety
+  
+  ESP_LOGD(TAG, "Hardware reset completed");
 }
 
 } // namespace si4703
