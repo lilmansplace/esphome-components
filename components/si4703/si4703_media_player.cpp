@@ -20,17 +20,16 @@ void Si4703MediaPlayer::dump_config() {
 
 media_player::MediaPlayerTraits Si4703MediaPlayer::get_traits() {
   auto traits = media_player::MediaPlayerTraits();
-  // Must be ON/OFF to receive PLAY/PAUSE commands
-  traits.set_supports_command(media_player::MEDIA_PLAYER_COMMAND_PAUSE);
-  traits.set_supports_command(media_player::MEDIA_PLAYER_COMMAND_PLAY);
-  traits.set_supports_command(media_player::MEDIA_PLAYER_COMMAND_MUTE);
-  traits.set_supports_command(media_player::MEDIA_PLAYER_COMMAND_UNMUTE);
-  traits.set_supports_command(media_player::MEDIA_PLAYER_COMMAND_VOLUME_SET);
-  // Use NEXT/PREVIOUS TRACK for seeking
-  traits.set_supports_command(media_player::MEDIA_PLAYER_COMMAND_NEXT_TRACK);
-  traits.set_supports_command(media_player::MEDIA_PLAYER_COMMAND_PREVIOUS_TRACK);
-  // Use PLAY_MEDIA to set frequency
-  traits.set_supports_command(media_player::MEDIA_PLAYER_COMMAND_PLAY_MEDIA);
+  // Set supported features
+  traits.set_supports_pause(true);
+  traits.set_supports_play(true);
+  traits.set_supports_stop(false);
+  traits.set_supports_volume_set(true);
+  traits.set_supports_volume_up(true);
+  traits.set_supports_volume_down(true);
+  traits.set_supports_toggle(false);
+  traits.set_supports_mute(true); // Use for mute/unmute
+  // No explicit next/prev track support in API, but we'll handle commands in control()
   return traits;
 }
 
@@ -52,11 +51,11 @@ void Si4703MediaPlayer::control(const media_player::MediaPlayerCall &call) {
         break;
       case media_player::MEDIA_PLAYER_COMMAND_MUTE:
         this->parent_->mute();
-        this->muted = true;
+        this->is_muted = true;
         break;
       case media_player::MEDIA_PLAYER_COMMAND_UNMUTE:
         this->parent_->unmute();
-        this->muted = false;
+        this->is_muted = false;
         break;
       case media_player::MEDIA_PLAYER_COMMAND_VOLUME_UP:
         // Optional: Implement gradual volume up
@@ -66,17 +65,18 @@ void Si4703MediaPlayer::control(const media_player::MediaPlayerCall &call) {
         // Optional: Implement gradual volume down
         // this->parent_->set_volume(this->parent_->current_volume_ - 1);
         break;
-      case media_player::MEDIA_PLAYER_COMMAND_NEXT_TRACK:
-        this->parent_->seek_up();
-        this->state = media_player::MEDIA_PLAYER_STATE_PLAYING; // Assume seek starts playback
-        break;
-      case media_player::MEDIA_PLAYER_COMMAND_PREVIOUS_TRACK:
-        this->parent_->seek_down();
-        this->state = media_player::MEDIA_PLAYER_STATE_PLAYING; // Assume seek starts playback
-        break;
-      // Handle other commands if needed (STOP, TOGGLE, etc.)
+      // Handle seeking as up/down operations (no specific next/prev track commands)
       default:
-        ESP_LOGW(TAG, "Unsupported media command");
+        // Special handling for custom commands
+        if (call.get_command().value() == 76) { // Custom command for NEXT_TRACK
+          this->parent_->seek_up();
+          this->state = media_player::MEDIA_PLAYER_STATE_PLAYING;
+        } else if (call.get_command().value() == 77) { // Custom command for PREV_TRACK
+          this->parent_->seek_down();
+          this->state = media_player::MEDIA_PLAYER_STATE_PLAYING;
+        } else {
+          ESP_LOGW(TAG, "Unsupported media command: %d", call.get_command().value());
+        }
         break;
     }
   }
@@ -86,7 +86,7 @@ void Si4703MediaPlayer::control(const media_player::MediaPlayerCall &call) {
     uint8_t si4703_volume = static_cast<uint8_t>(volume_level * 15.0f); // Scale 0.0-1.0 to 0-15
     this->parent_->set_volume(si4703_volume);
     this->volume = volume_level; // Update internal state
-    this->muted = (si4703_volume == 0);
+    this->is_muted = (si4703_volume == 0);
   }
 
   if (call.get_media_url().has_value()) {
