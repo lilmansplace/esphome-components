@@ -3,6 +3,7 @@
 #include "esphome/core/component.h"
 #include "esphome/components/i2c/i2c.h"
 #include "esphome/core/gpio.h"
+#include "esphome/components/sensor/sensor.h"
 
 namespace esphome {
 namespace si4703 {
@@ -12,6 +13,9 @@ class Si4703Component : public Component, public i2c::I2CDevice {
   void setup() override;
   void dump_config() override;
   float get_setup_priority() const override;
+  
+  // Add update method that will be called periodically
+  void update();
 
   // --- Radio Control Methods (Add more as needed) ---
   void set_frequency(float frequency);
@@ -30,6 +34,9 @@ class Si4703Component : public Component, public i2c::I2CDevice {
   
   // Reset pin configuration
   void set_reset_pin(GPIOPin *reset_pin) { this->reset_pin_ = reset_pin; }
+  
+  // Frequency sensor
+  void set_frequency_sensor(sensor::Sensor *sensor) { this->frequency_sensor_ = sensor; }
 
  protected:
   // Internal helper methods for I2C communication and chip control
@@ -47,6 +54,9 @@ class Si4703Component : public Component, public i2c::I2CDevice {
   
   // Reset pin
   GPIOPin *reset_pin_{nullptr};
+  
+  // Sensors
+  sensor::Sensor *frequency_sensor_{nullptr};
 };
 
 } // namespace si4703

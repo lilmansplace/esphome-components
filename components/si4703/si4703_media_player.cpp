@@ -107,14 +107,13 @@ void Si4703MediaPlayer::control(const media_player::MediaPlayerCall &call) {
 
   // After other operations, update frequency information
   if (this->parent_ != nullptr) {
-    char freq_str[16];
-    sprintf(freq_str, "%.1f MHz", this->parent_->get_frequency());
+    // Log current frequency for debugging
+    ESP_LOGD(TAG, "Current frequency: %.1f MHz", this->parent_->get_frequency());
     
-    // Set station frequency in a way that will show in Home Assistant
-    this->source = freq_str;
-    
-    // If the station is properly tuned, consider it playing
-    this->state = media_player::MEDIA_PLAYER_STATE_PLAYING;
+    // Set state to PLAYING if we have a valid frequency
+    if (this->parent_->get_frequency() >= 87.5) {
+      this->state = media_player::MEDIA_PLAYER_STATE_PLAYING;
+    }
   }
 
   this->publish_state(); // Update Home Assistant with the new state

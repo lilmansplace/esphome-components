@@ -92,6 +92,11 @@ void Si4703Component::setup() {
       ESP_LOGW(TAG, "Failed to set initial configuration");
   }
 
+  // Register a 5-second update callback for sensors
+  if (this->frequency_sensor_ != nullptr) {
+    this->set_interval("update", 5000, [this]() { this->update(); });
+  }
+
   ESP_LOGCONFIG(TAG, "Si4703 Setup Complete.");
 }
 
@@ -232,6 +237,12 @@ void Si4703Component::set_frequency(float frequency) {
       ESP_LOGW(TAG, "Failed to read final registers after tuning");
       // Set frequency optimistically
       this->current_frequency_ = frequency;
+  }
+
+  // At the end of the method, after successfully setting frequency
+  if (this->frequency_sensor_ != nullptr) {
+    float frequency_hz = frequency * 1000000.0f;
+    this->frequency_sensor_->publish_state(frequency_hz);
   }
 }
 
@@ -483,6 +494,17 @@ void Si4703Component::reset_device_() {
   esphome::delay(500);
   
   ESP_LOGD(TAG, "Hardware reset completed, Si4703 should now be ready for I2C communication");
+}
+
+// Add the update method
+void Si4703Component::update() {
+  // Update the frequency sensor
+  if (this->frequency_sensor_ != nullptr) {
+    // Convert from MHz to Hz for the sensor
+    float frequency_hz = this->current_frequency_ * 1000000.0f;
+    ESP_LOGD(TAG, "Publishing frequency: %.1f MHz (%.0f Hz)", this->current_frequency_, frequency_hz);
+    this->frequency_sensor_->publish_state(frequency_hz);
+  }
 }
 
 } // namespace si4703
