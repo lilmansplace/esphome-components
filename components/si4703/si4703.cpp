@@ -180,6 +180,7 @@ void Si4703Component::set_frequency(float frequency) {
   // Channel spacing = 0.1 MHz (100kHz)
   // Bottom of band = 87.5 MHz
   uint16_t channel = static_cast<uint16_t>((frequency - 87.5f) / 0.1f);
+  ESP_LOGD(TAG, "Calculated channel value: %u for frequency %.1f MHz", channel, frequency);
 
   // Read current registers
   if (!this->read_registers_()) {
@@ -187,10 +188,22 @@ void Si4703Component::set_frequency(float frequency) {
     // Attempt to continue with cached values, might fail
   }
 
+  // Log the current state of relevant registers
+  ESP_LOGD(TAG, "Before tuning - CHANNEL: 0x%04X, SYSCONFIG1: 0x%04X, POWERCFG: 0x%04X", 
+           this->registers_[SI4703_REG_CHANNEL], 
+           this->registers_[SI4703_REG_SYSCONFIG1],
+           this->registers_[SI4703_REG_POWERCFG]);
+
   // Update CHANNEL register with new channel and set TUNE bit
   this->registers_[SI4703_REG_CHANNEL] &= 0xFE00; // Clear channel bits (lower 10 bits)
   this->registers_[SI4703_REG_CHANNEL] |= channel; // Set new channel
   this->registers_[SI4703_REG_CHANNEL] |= SI4703_BIT_TUNE; // Set TUNE bit
+
+  ESP_LOGD(TAG, "After setting tuning bits - CHANNEL: 0x%04X", this->registers_[SI4703_REG_CHANNEL]);
+
+  // Make sure we're not in powerdown mode
+  this->registers_[SI4703_REG_POWERCFG] &= ~SI4703_BIT_DISABLE; // Clear disable bit
+  this->registers_[SI4703_REG_POWERCFG] |= SI4703_BIT_ENABLE;   // Set enable bit 
 
   // Write registers to start tuning
   if (!this->write_registers_()) {
@@ -199,9 +212,11 @@ void Si4703Component::set_frequency(float frequency) {
   }
 
   // Wait for the TUNE operation to complete by polling the STC bit
-  ESP_LOGV(TAG, "Waiting for tune complete (STC bit)...");
+  ESP_LOGD(TAG, "Waiting for tune complete (STC bit)...");
   int attempts = 0;
   const int max_attempts = 100; // Timeout after ~1 second (100 * 10ms)
+  bool tune_complete = false;
+  
   while (attempts < max_attempts) {
     esphome::delay(10); // Use esphome::delay instead of delay
     if (!this->read_registers_()) {
@@ -209,17 +224,24 @@ void Si4703Component::set_frequency(float frequency) {
         // Continue waiting, maybe the next read will work
     } else {
         if ((this->registers_[SI4703_REG_STATUSRSSI] & SI4703_BIT_STC) != 0) {
-            ESP_LOGV(TAG, "Tune complete (STC bit is set)");
+            ESP_LOGD(TAG, "Tune complete (STC bit is set) after %d attempts", attempts);
+            tune_complete = true;
             break; // Tune complete
         }
     }
     attempts++;
   }
 
-  if (attempts == max_attempts) {
+  if (!tune_complete) {
       ESP_LOGW(TAG, "Timeout waiting for tune completion (STC bit)");
       // Try to clear TUNE bit anyway
   }
+
+  // Log the current state after tuning
+  ESP_LOGD(TAG, "After tuning - CHANNEL: 0x%04X, READCHAN: 0x%04X, STATUSRSSI: 0x%04X", 
+           this->registers_[SI4703_REG_CHANNEL],
+           this->registers_[SI4703_REG_READCHAN],
+           this->registers_[SI4703_REG_STATUSRSSI]);
 
   // Clear the TUNE bit (must be done after STC is set)
   this->registers_[SI4703_REG_CHANNEL] &= ~SI4703_BIT_TUNE;
@@ -229,7 +251,7 @@ void Si4703Component::set_frequency(float frequency) {
     ESP_LOGE(TAG, "Failed to write registers to clear TUNE bit");
   }
 
-  // Update internal tracking of frequency even if read fails
+  // Force update of internal tracking even if read fails
   this->current_frequency_ = frequency;
   
   // Read final status to update internal state
@@ -240,6 +262,17 @@ void Si4703Component::set_frequency(float frequency) {
       if (this->frequency_sensor_ != nullptr) {
         float frequency_hz = frequency * 1000000.0f;
         this->frequency_sensor_->publish_state(frequency_hz);
+      }
+  } else {
+      // Double-check if tuning was successful by checking READCHAN
+      uint16_t actual_channel = this->registers_[SI4703_REG_READCHAN] & 0x03FF;
+      float actual_freq = 87.5f + (static_cast<float>(actual_channel) * 0.1f);
+      ESP_LOGD(TAG, "Final channel value: %u (%.1f MHz), requested: %u (%.1f MHz)", 
+               actual_channel, actual_freq, channel, frequency);
+      
+      if (actual_channel != channel) {
+          ESP_LOGW(TAG, "Tuning mismatch! Requested: %.1f MHz, Actual: %.1f MHz", 
+                  frequency, actual_freq);
       }
   }
 }
@@ -287,12 +320,12 @@ void Si4703Component::set_volume(uint8_t volume) {
   this->registers_[SI4703_REG_SYSCONFIG2] &= 0xFFF0; // Clear volume bits (lower 4 bits)
   this->registers_[SI4703_REG_SYSCONFIG2] |= volume; // Set new volume
 
-  // Check mute status - if volume > 0, ensure DMUTE is off
-  if (volume > 0 && this->muted_) {
-    this->registers_[SI4703_REG_POWERCFG] &= ~(1 << 14); // Clear DMUTE bit
+  // Check mute status - if volume > 0, ensure DMUTE is SET (unmuted)
+  if (volume > 0) {
+    this->registers_[SI4703_REG_POWERCFG] |= SI4703_BIT_DMUTE; // Set DMUTE bit to disable muting
     this->muted_ = false;
   } else if (volume == 0) {
-    this->registers_[SI4703_REG_POWERCFG] |= (1 << 14); // Set DMUTE bit
+    this->registers_[SI4703_REG_POWERCFG] &= ~SI4703_BIT_DMUTE; // Clear DMUTE bit to enable muting
     this->muted_ = true;
   }
 
@@ -438,8 +471,8 @@ void Si4703Component::mute() {
     ESP_LOGW(TAG, "Failed to read registers before muting");
   }
 
-  // Set DMUTE bit in POWERCFG register
-  this->registers_[SI4703_REG_POWERCFG] |= (1 << 14);
+  // Clear DMUTE bit in POWERCFG register to enable muting
+  this->registers_[SI4703_REG_POWERCFG] &= ~SI4703_BIT_DMUTE;
 
   if (!this->write_registers_()) {
     ESP_LOGE(TAG, "Failed to write registers for muting");
@@ -454,8 +487,8 @@ void Si4703Component::unmute() {
     ESP_LOGW(TAG, "Failed to read registers before unmuting");
   }
 
-  // Clear DMUTE bit in POWERCFG register
-  this->registers_[SI4703_REG_POWERCFG] &= ~(1 << 14);
+  // Set DMUTE bit in POWERCFG register to disable muting
+  this->registers_[SI4703_REG_POWERCFG] |= SI4703_BIT_DMUTE;
 
   // If volume was previously 0, set it to a minimum audible level (e.g., 1)
   if (this->current_volume_ == 0) {
@@ -463,10 +496,10 @@ void Si4703Component::unmute() {
     // Note: set_volume already writes registers and handles DMUTE
     // So we don't need to call write_registers_() again here if volume was 0.
   } else {
-      // Only write registers if volume was not 0 (otherwise set_volume handles it)
-      if (!this->write_registers_()) {
-        ESP_LOGE(TAG, "Failed to write registers for unmuting");
-      }
+    // Only write registers if volume was not 0 (otherwise set_volume handles it)
+    if (!this->write_registers_()) {
+      ESP_LOGE(TAG, "Failed to write registers for unmuting");
+    }
   }
 }
 
