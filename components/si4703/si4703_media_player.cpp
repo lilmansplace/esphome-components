@@ -20,16 +20,8 @@ void Si4703MediaPlayer::dump_config() {
 
 media_player::MediaPlayerTraits Si4703MediaPlayer::get_traits() {
   auto traits = media_player::MediaPlayerTraits();
-  // Set supported features
+  // ESPHome media player only supports pause in traits
   traits.set_supports_pause(true);
-  traits.set_supports_play(true);
-  traits.set_supports_stop(false);
-  traits.set_supports_volume_set(true);
-  traits.set_supports_volume_up(true);
-  traits.set_supports_volume_down(true);
-  traits.set_supports_toggle(false);
-  traits.set_supports_mute(true); // Use for mute/unmute
-  // No explicit next/prev track support in API, but we'll handle commands in control()
   return traits;
 }
 
@@ -51,11 +43,11 @@ void Si4703MediaPlayer::control(const media_player::MediaPlayerCall &call) {
         break;
       case media_player::MEDIA_PLAYER_COMMAND_MUTE:
         this->parent_->mute();
-        this->is_muted = true;
+        // Don't try to set is_muted directly as it's a method
         break;
       case media_player::MEDIA_PLAYER_COMMAND_UNMUTE:
         this->parent_->unmute();
-        this->is_muted = false;
+        // Don't try to set is_muted directly as it's a method
         break;
       case media_player::MEDIA_PLAYER_COMMAND_VOLUME_UP:
         // Optional: Implement gradual volume up
@@ -86,7 +78,7 @@ void Si4703MediaPlayer::control(const media_player::MediaPlayerCall &call) {
     uint8_t si4703_volume = static_cast<uint8_t>(volume_level * 15.0f); // Scale 0.0-1.0 to 0-15
     this->parent_->set_volume(si4703_volume);
     this->volume = volume_level; // Update internal state
-    this->is_muted = (si4703_volume == 0);
+    // Don't try to set is_muted directly as it's a method
   }
 
   if (call.get_media_url().has_value()) {
