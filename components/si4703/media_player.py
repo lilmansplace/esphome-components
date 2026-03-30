@@ -13,7 +13,7 @@ Si4703MediaPlayer = si4703_ns.class_(
     "Si4703MediaPlayer", media_player.MediaPlayer, cg.Component
 )
 
-CONFIG_SCHEMA = media_player.MEDIA_PLAYER_SCHEMA.extend(
+CONFIG_SCHEMA = media_player._MEDIA_PLAYER_SCHEMA.extend(
     {
         cv.GenerateID(): cv.declare_id(Si4703MediaPlayer),
         cv.GenerateID(CONF_SI4703_ID): cv.use_id(Si4703Component),
@@ -31,4 +31,4 @@ async def to_code(config):
     cg.add(var.set_parent(parent))
 
     # You might need to tell the C++ media player about features supported
-    # cg.add(var.set_supported_features(...)) 
+    # cg.add(var.set_supported_features(...))
