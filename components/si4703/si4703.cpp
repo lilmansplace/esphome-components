@@ -386,6 +386,17 @@ void Si4703Component::finish_seek_() {
   }
 }
 
+void Si4703Component::set_seek_threshold(uint8_t v) {
+  if (v > 127)
+    v = 127;
+  this->seek_threshold_ = v;
+  if (!this->ready_)
+    return;  // applied during init
+  this->registers_[REG_SYSCONFIG2] = (this->registers_[REG_SYSCONFIG2] & 0x00FF) | (uint16_t(v) << 8);
+  this->write_regs_();
+  ESP_LOGD(TAG, "Seek threshold set to %u dBuV", v);
+}
+
 void Si4703Component::set_volume(uint8_t volume) {
   if (volume > 15)
     volume = 15;

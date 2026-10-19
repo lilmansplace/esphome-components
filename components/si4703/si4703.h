@@ -25,7 +25,9 @@ class Si4703Component : public Component, public i2c::I2CDevice {
   void set_initial_frequency(float mhz) { this->initial_frequency_ = mhz; }
   void set_initial_volume(uint8_t v) { this->current_volume_ = v > 15 ? 15 : v; }
   void set_de_emphasis_50us(bool v) { this->de_50us_ = v; }
-  void set_seek_threshold(uint8_t v) { this->seek_threshold_ = v; }
+  // Seek RSSI threshold (dBuV, 0-127). Can be changed at runtime; applies to the next seek.
+  void set_seek_threshold(uint8_t v);
+  uint8_t get_seek_threshold() const { return this->seek_threshold_; }
   void set_frequency_sensor(sensor::Sensor *s) { this->frequency_sensor_ = s; }
   void set_rssi_sensor(sensor::Sensor *s) { this->rssi_sensor_ = s; }
   void set_station_name_sensor(text_sensor::TextSensor *s) { this->station_name_sensor_ = s; }

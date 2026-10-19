@@ -9,6 +9,8 @@ esphome:
     priority: -100
     then:
       - lambda: |-
+          id(radio).set_seek_threshold(id(last_seek_threshold));
+          id(seek_threshold_number).publish_state(id(last_seek_threshold));
           id(radio).set_volume(id(last_volume));
           id(radio).set_frequency(id(last_frequency));
           id(volume_number).publish_state(id(last_volume));
@@ -35,6 +37,10 @@ globals:
     type: float
     restore_value: true
     initial_value: '${start_frequency}'
+  - id: last_seek_threshold
+    type: int
+    restore_value: true
+    initial_value: '10'
   - id: last_volume
     type: int
     restore_value: true
@@ -69,6 +75,22 @@ si4703:
     name: "Radio Text"
 
 number:
+  - platform: template
+    name: "Seek Threshold"
+    id: seek_threshold_number
+    icon: mdi:tune-variant
+    entity_category: config
+    unit_of_measurement: dBµV
+    min_value: 0
+    max_value: 50
+    step: 1
+    mode: slider
+    optimistic: true
+    set_action:
+      - lambda: |-
+          id(radio).set_seek_threshold((uint8_t) x);
+          id(last_seek_threshold) = (int) x;
+
   - platform: template
     name: "Frequency"
     id: freq_number
