@@ -128,7 +128,7 @@ void Si4703Component::init_stage2_() {
     this->mark_failed();
     return;
   }
-  ESP_LOGD(TAG, "Oscillator check: TEST1=0x%04X", this->registers_[REG_TEST1]);
+  ESP_LOGI(TAG, "Oscillator check: TEST1=0x%04X", this->registers_[REG_TEST1]);
 
   uint16_t pwr = PWR_ENABLE;
   if (!this->muted_)
@@ -153,6 +153,7 @@ void Si4703Component::init_stage2_() {
     ESP_LOGI(TAG, "Si4703 powered up (POWERCFG=0x%04X SYSCONFIG2=0x%04X)", this->registers_[REG_POWERCFG],
              this->registers_[REG_SYSCONFIG2]);
     this->set_frequency(this->initial_frequency_);
+    this->log_registers();
   });
 }
 
@@ -272,6 +273,23 @@ void Si4703Component::refresh_frequency_() {
     this->frequency_sensor_->publish_state(this->current_frequency_);
   if (this->rssi_sensor_ != nullptr)
     this->rssi_sensor_->publish_state(this->rssi_);
+}
+
+void Si4703Component::log_registers() {
+  if (!this->read_all_()) {
+    ESP_LOGE(TAG, "Register dump: read failed");
+    return;
+  }
+  const uint16_t *r = this->registers_;
+  ESP_LOGI(TAG, "Regs 00-07: %04X %04X %04X %04X %04X %04X %04X %04X", r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7]);
+  ESP_LOGI(TAG, "Regs 08-0F: %04X %04X %04X %04X %04X %04X %04X %04X", r[8], r[9], r[10], r[11], r[12], r[13], r[14],
+           r[15]);
+  ESP_LOGI(TAG, "  POWERCFG=%04X (ENABLE=%d DISABLE=%d DMUTE=%d) TEST1=%04X (XOSCEN=%d)", r[REG_POWERCFG],
+           (r[REG_POWERCFG] & PWR_ENABLE) != 0, (r[REG_POWERCFG] & PWR_DISABLE) != 0,
+           (r[REG_POWERCFG] & PWR_DMUTE) != 0, r[REG_TEST1], (r[REG_TEST1] & 0x8000) != 0);
+  ESP_LOGI(TAG, "  STATUS=%04X RSSI=%u STC=%d SF/BL=%d ST=%d READCHAN=%u", r[REG_STATUSRSSI], r[REG_STATUSRSSI] & 0xFF,
+           (r[REG_STATUSRSSI] & ST_STC) != 0, (r[REG_STATUSRSSI] & ST_SFBL) != 0, (r[REG_STATUSRSSI] & ST_ST) != 0,
+           r[REG_READCHAN] & 0x03FF);
 }
 
 // ---------------------------------------------------------------- control

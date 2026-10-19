@@ -48,6 +48,8 @@ class Si4703Component : public Component, public i2c::I2CDevice {
   bool is_seeking() const { return this->seeking_; }
   int get_signal_strength() const { return this->rssi_; }
   bool is_stereo() const { return this->stereo_; }
+  // Read and log all 16 registers (for debugging)
+  void log_registers();
 
  protected:
   void hardware_reset_();
