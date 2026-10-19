@@ -1,5 +1,8 @@
 #pragma once
 
+#include "esphome/core/defines.h"
+#ifdef USE_MEDIA_PLAYER
+
 #include "esphome/components/media_player/media_player.h"
 #include "si4703.h"
 
@@ -26,4 +29,6 @@ class Si4703MediaPlayer : public media_player::MediaPlayer, public Component {
 };
 
 } // namespace si4703
-} // namespace esphome 
+} // namespace esphome
+
+#endif  // USE_MEDIA_PLAYER

@@ -1,3 +1,6 @@
+#include "esphome/core/defines.h"
+#ifdef USE_MEDIA_PLAYER
+
 #include "si4703_media_player.h"
 #include "esphome/core/log.h"
 #include "esphome/core/hal.h"
@@ -120,4 +123,6 @@ void Si4703MediaPlayer::control(const media_player::MediaPlayerCall &call) {
 }
 
 } // namespace si4703
-} // namespace esphome 
+} // namespace esphome
+
+#endif  // USE_MEDIA_PLAYER
