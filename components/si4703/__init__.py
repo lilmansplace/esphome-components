@@ -39,7 +39,7 @@ CONFIG_SCHEMA = (
             ),
             cv.Optional(CONF_START_VOLUME, default=8): cv.int_range(min=0, max=15),
             cv.Optional(CONF_DE_EMPHASIS, default="75us"): cv.enum(DE_EMPHASIS),
-            cv.Optional(CONF_SEEK_THRESHOLD, default=25): cv.int_range(
+            cv.Optional(CONF_SEEK_THRESHOLD, default=10): cv.int_range(
                 min=0, max=127
             ),
             cv.Optional(CONF_FREQUENCY_SENSOR): sensor.sensor_schema(

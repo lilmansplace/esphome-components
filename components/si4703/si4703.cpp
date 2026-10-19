@@ -32,6 +32,7 @@ static const uint16_t EXPECTED_DEVICEID = 0x1242;
 static const uint16_t PWR_DSMUTE = 1 << 15;
 static const uint16_t PWR_DMUTE = 1 << 14;
 static const uint16_t PWR_MONO = 1 << 13;
+static const uint16_t PWR_RDSM = 1 << 11;    // RDS verbose mode: report block error levels
 static const uint16_t PWR_SKMODE = 1 << 10;  // 1 = stop at band limit, 0 = wrap
 static const uint16_t PWR_SEEKUP = 1 << 9;
 static const uint16_t PWR_SEEK = 1 << 8;
@@ -54,11 +55,12 @@ static const uint16_t ST_STC = 1 << 14;
 static const uint16_t ST_SFBL = 1 << 13;
 static const uint16_t ST_ST = 1 << 8;
 // READCHAN (0x0B) block error bits for B, C, D
-static const uint16_t RC_BLER_MASK = 0xFC00;
+// READCHAN (0x0B) block error levels (verbose mode): BLERB[15:14] BLERC[13:12] BLERD[11:10]
+// 0 = no errors, 1 = 1-2 corrected, 2 = 3-5 corrected, 3 = uncorrectable
 
 static const float BAND_BOTTOM = 87.5f;   // BAND = 00 : 87.5 - 108 MHz
 static const float CHANNEL_STEP = 0.1f;   // SPACE = 01: 100 kHz
-static const uint32_t POLL_INTERVAL_MS = 40;
+static const uint32_t POLL_INTERVAL_MS = 20;  // RDS groups arrive every ~88 ms; RDSR stays up ~40 ms
 static const uint32_t RSSI_PUBLISH_MS = 2000;
 static const uint32_t SEEK_TIMEOUT_MS = 10000;
 static const uint8_t MAX_INIT_ATTEMPTS = 5;
@@ -130,7 +132,7 @@ void Si4703Component::init_stage2_() {
   }
   ESP_LOGI(TAG, "Oscillator check: TEST1=0x%04X", this->registers_[REG_TEST1]);
 
-  uint16_t pwr = PWR_ENABLE;
+  uint16_t pwr = PWR_ENABLE | PWR_RDSM;
   if (!this->muted_)
     pwr |= PWR_DMUTE;
   if (this->current_mono_)
@@ -196,11 +198,38 @@ void Si4703Component::loop() {
 
   this->process_rds_();
 
+  // Average RSSI over a 2 s window; publish only when it changes (or every 60 s)
+  this->rssi_sum_ += this->rssi_;
+  this->rssi_count_++;
   if (now - this->last_rssi_publish_ >= RSSI_PUBLISH_MS) {
+    const int avg = static_cast<int>(std::lround(float(this->rssi_sum_) / float(this->rssi_count_)));
+    this->rssi_sum_ = 0;
+    this->rssi_count_ = 0;
+    const bool force = (now - this->last_rssi_forced_) >= 60000;
+    if (this->rssi_sensor_ != nullptr && (avg != this->last_rssi_published_ || force)) {
+      this->rssi_sensor_->publish_state(avg);
+      this->last_rssi_published_ = avg;
+      if (force)
+        this->last_rssi_forced_ = now;
+    }
     this->last_rssi_publish_ = now;
-    if (this->rssi_sensor_ != nullptr)
-      this->rssi_sensor_->publish_state(this->rssi_);
   }
+}
+
+void Si4703Component::report_after_settle_(const char *what) {
+  // RSSI/stereo need a few hundred ms after a tune/seek to settle
+  this->set_timeout("settle", 500, [this, what]() {
+    if (!this->read_status_())
+      return;
+    ESP_LOGI(TAG, "%s %.1f MHz, RSSI %d dBuV, %s", what, this->current_frequency_, this->rssi_,
+             this->stereo_ ? "stereo" : "mono");
+    if (this->rssi_sensor_ != nullptr) {
+      this->rssi_sensor_->publish_state(this->rssi_);
+      this->last_rssi_published_ = this->rssi_;
+    }
+    this->rssi_sum_ = 0;
+    this->rssi_count_ = 0;
+  });
 }
 
 // ---------------------------------------------------------------- I2C helpers
@@ -271,8 +300,6 @@ void Si4703Component::refresh_frequency_() {
   this->current_frequency_ = std::round(this->current_frequency_ * 10.0f) / 10.0f;
   if (this->frequency_sensor_ != nullptr)
     this->frequency_sensor_->publish_state(this->current_frequency_);
-  if (this->rssi_sensor_ != nullptr)
-    this->rssi_sensor_->publish_state(this->rssi_);
 }
 
 void Si4703Component::log_registers() {
@@ -290,6 +317,8 @@ void Si4703Component::log_registers() {
   ESP_LOGI(TAG, "  STATUS=%04X RSSI=%u STC=%d SF/BL=%d ST=%d READCHAN=%u", r[REG_STATUSRSSI], r[REG_STATUSRSSI] & 0xFF,
            (r[REG_STATUSRSSI] & ST_STC) != 0, (r[REG_STATUSRSSI] & ST_SFBL) != 0, (r[REG_STATUSRSSI] & ST_ST) != 0,
            r[REG_READCHAN] & 0x03FF);
+  ESP_LOGI(TAG, "  RDS groups accepted since tune: %u, station '%s', candidate '%s'", (unsigned) this->rds_groups_,
+           this->last_ps_.c_str(), this->ps_candidate_.c_str());
 }
 
 // ---------------------------------------------------------------- control
@@ -325,8 +354,7 @@ void Si4703Component::set_frequency(float mhz) {
 
   this->clear_rds_();
   this->refresh_frequency_();
-  ESP_LOGI(TAG, "Tuned to %.1f MHz, RSSI %d dBuV, %s", this->current_frequency_, this->rssi_,
-           this->stereo_ ? "stereo" : "mono");
+  this->report_after_settle_("Tuned to");
 }
 
 void Si4703Component::start_seek_(bool up) {
@@ -354,7 +382,7 @@ void Si4703Component::finish_seek_() {
   if (failed) {
     ESP_LOGW(TAG, "Seek found no station (stopped at %.1f MHz)", this->current_frequency_);
   } else {
-    ESP_LOGI(TAG, "Seek found %.1f MHz, RSSI %d dBuV", this->current_frequency_, this->rssi_);
+    this->report_after_settle_("Seek found");
   }
 }
 
@@ -406,6 +434,9 @@ void Si4703Component::clear_rds_() {
   this->rt_ab_ = -1;
   this->last_ps_.clear();
   this->last_rt_.clear();
+  this->ps_candidate_.clear();
+  this->rt_candidate_.clear();
+  this->rds_groups_ = 0;
   if (this->station_name_sensor_ != nullptr)
     this->station_name_sensor_->publish_state("");
   if (this->radio_text_sensor_ != nullptr)
@@ -427,8 +458,15 @@ static std::string trim(const char *s) {
 void Si4703Component::process_rds_() {
   if (!(this->registers_[REG_STATUSRSSI] & ST_RDSR))
     return;
-  if (this->registers_[REG_READCHAN] & RC_BLER_MASK)
-    return;  // B, C or D block had errors - skip
+  // Accept corrected blocks (levels 0-2); drop uncorrectable ones. Because corrected blocks can
+  // occasionally still be wrong, names/texts are only published after being seen twice in a row.
+  const uint16_t rc = this->registers_[REG_READCHAN];
+  const uint8_t bler_b = (rc >> 14) & 0x03;
+  const uint8_t bler_c = (rc >> 12) & 0x03;
+  const uint8_t bler_d = (rc >> 10) & 0x03;
+  if (bler_b > 1)
+    return;  // block B carries group type/segment - require it to be clean (or 1-2 bits corrected)
+  this->rds_groups_++;
 
   const uint16_t b = this->registers_[REG_RDSB];
   const uint16_t c = this->registers_[REG_RDSC];
@@ -438,21 +476,26 @@ void Si4703Component::process_rds_() {
 
   if (group == 0) {
     // Programme Service name: 4 segments x 2 chars, in block D
+    if (bler_d > 2)
+      return;
     const uint8_t seg = b & 0x03;
     this->ps_[seg * 2] = rds_char(d >> 8);
     this->ps_[seg * 2 + 1] = rds_char(d & 0xFF);
     this->ps_seen_ |= (1 << seg);
     if (this->ps_seen_ == 0x0F) {
       std::string ps = trim(this->ps_);
-      if (!ps.empty() && ps != this->last_ps_) {
+      if (!ps.empty() && ps == this->ps_candidate_ && ps != this->last_ps_) {
         this->last_ps_ = ps;
-        ESP_LOGD(TAG, "RDS station: '%s'", ps.c_str());
+        ESP_LOGI(TAG, "RDS station: '%s'", ps.c_str());
         if (this->station_name_sensor_ != nullptr)
           this->station_name_sensor_->publish_state(ps);
       }
+      this->ps_candidate_ = ps;
       this->ps_seen_ = 0;
     }
   } else if (group == 2) {
+    if (bler_d > 2 || (!version_b && bler_c > 2))
+      return;
     // RadioText
     const int8_t ab = (b >> 4) & 0x01;
     if (this->rt_ab_ != -1 && ab != this->rt_ab_) {
@@ -489,12 +532,14 @@ void Si4703Component::process_rds_() {
     if ((this->rt_seen_ & needed) == needed) {
       // Stop at first NUL (unfilled positions)
       std::string rt = trim(std::string(this->rt_, strnlen(this->rt_, 64)).c_str());
-      if (!rt.empty() && rt != this->last_rt_) {
+      if (!rt.empty() && rt == this->rt_candidate_ && rt != this->last_rt_) {
         this->last_rt_ = rt;
-        ESP_LOGD(TAG, "RDS text: '%s'", rt.c_str());
+        ESP_LOGI(TAG, "RDS text: '%s'", rt.c_str());
         if (this->radio_text_sensor_ != nullptr)
           this->radio_text_sensor_->publish_state(rt);
       }
+      this->rt_candidate_ = rt;
+      this->rt_seen_ = 0;
     }
   }
 }

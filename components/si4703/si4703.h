@@ -55,6 +55,7 @@ class Si4703Component : public Component, public i2c::I2CDevice {
   void hardware_reset_();
   void init_stage1_();  // verify chip, start crystal oscillator
   void init_stage2_();  // power up and configure
+  void report_after_settle_(const char *what);
   void start_seek_(bool up);
   void finish_seek_();
 
@@ -78,7 +79,7 @@ class Si4703Component : public Component, public i2c::I2CDevice {
   float initial_frequency_{87.5f};
   float current_frequency_{0.0f};
   uint8_t current_volume_{8};
-  uint8_t seek_threshold_{25};
+  uint8_t seek_threshold_{10};
   bool de_50us_{false};
   bool current_mono_{false};
   bool muted_{false};
@@ -91,6 +92,11 @@ class Si4703Component : public Component, public i2c::I2CDevice {
   uint32_t seek_started_{0};
   uint32_t last_poll_{0};
   uint32_t last_rssi_publish_{0};
+  uint32_t last_rssi_forced_{0};
+  uint32_t rssi_sum_{0};
+  uint32_t rssi_count_{0};
+  int last_rssi_published_{-1};
+  uint32_t rds_groups_{0};
 
   // RDS
   char ps_[9]{0};
@@ -100,6 +106,8 @@ class Si4703Component : public Component, public i2c::I2CDevice {
   uint16_t rt_seen_{0};
   int8_t rt_ab_{-1};
   std::string last_rt_;
+  std::string ps_candidate_;
+  std::string rt_candidate_;
 };
 
 }  // namespace si4703
