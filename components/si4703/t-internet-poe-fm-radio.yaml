@@ -1,0 +1,142 @@
+# LilyGO T-Internet-POE + SparkFun Si4703 FM tuner (WRL-12938)
+#
+# Wiring:
+#   Si4703 SDIO -> GPIO14
+#   Si4703 SCLK -> GPIO33
+#   Si4703 RST  -> GPIO32
+#   Si4703 SEN  -> leave UNCONNECTED (SparkFun board pulls it high = I2C mode). Do NOT ground it.
+#   Si4703 3.3V -> 3V3, GND -> GND
+#   Headphones in the 3.5mm jack (the cable is the antenna)
+
+substitutions:
+  name: poe-fm-radio
+  friendly_name: PoE FM Radio
+  start_frequency: "88.1"
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+
+esp32:
+  board: esp32dev
+  framework:
+    type: arduino
+
+ethernet:
+  type: LAN8720
+  mdc_pin: GPIO23
+  mdio_pin: GPIO18
+  clk_mode: GPIO17_OUT
+  phy_addr: 0
+
+logger:
+  level: DEBUG
+
+api:
+
+ota:
+  - platform: esphome
+
+web_server:
+  port: 80
+
+external_components:
+  - source: github://lilmansplace/esphome-components@main
+    components: [si4703]
+    refresh: 0s
+
+i2c:
+  id: i2c_bus
+  sda:
+    number: GPIO14
+    allow_other_uses: true   # shared with si4703 sdio_pin (used only during reset)
+  scl: GPIO33
+  frequency: 100kHz
+  scan: true
+
+si4703:
+  id: radio
+  reset_pin: GPIO32
+  sdio_pin:
+    number: GPIO14
+    allow_other_uses: true
+  frequency: ${start_frequency}
+  volume: 8
+  de_emphasis: 75us          # Americas
+  frequency_sensor:
+    name: "Tuned Frequency"
+    id: tuned_frequency
+    on_value:
+      - lambda: 'id(freq_number).publish_state(x);'
+  rssi_sensor:
+    name: "Signal Strength"
+  station_name:
+    name: "Station Name"
+  radio_text:
+    name: "Radio Text"
+
+number:
+  - platform: template
+    name: "Frequency"
+    id: freq_number
+    icon: mdi:radio-fm
+    unit_of_measurement: MHz
+    min_value: 87.5
+    max_value: 108.0
+    step: 0.1
+    mode: box
+    optimistic: true
+    initial_value: ${start_frequency}
+    set_action:
+      - lambda: 'id(radio).set_frequency(x);'
+
+  - platform: template
+    name: "Volume"
+    id: volume_number
+    icon: mdi:volume-high
+    min_value: 0
+    max_value: 15
+    step: 1
+    mode: slider
+    optimistic: true
+    initial_value: 8
+    set_action:
+      - lambda: 'id(radio).set_volume((uint8_t) x);'
+
+button:
+  - platform: template
+    name: "Seek Up"
+    icon: mdi:skip-next
+    on_press:
+      - lambda: 'id(radio).seek_up();'
+  - platform: template
+    name: "Seek Down"
+    icon: mdi:skip-previous
+    on_press:
+      - lambda: 'id(radio).seek_down();'
+  - platform: restart
+    name: "Restart"
+
+switch:
+  - platform: template
+    name: "Mute"
+    icon: mdi:volume-off
+    lambda: 'return id(radio).is_muted();'
+    turn_on_action:
+      - lambda: 'id(radio).mute();'
+    turn_off_action:
+      - lambda: 'id(radio).unmute();'
+  - platform: template
+    name: "Force Mono"
+    icon: mdi:speaker
+    lambda: 'return id(radio).is_mono();'
+    turn_on_action:
+      - lambda: 'id(radio).set_mono(true);'
+    turn_off_action:
+      - lambda: 'id(radio).set_mono(false);'
+
+binary_sensor:
+  - platform: template
+    name: "Stereo"
+    icon: mdi:surround-sound
+    lambda: 'return id(radio).is_stereo();'
