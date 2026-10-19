@@ -42,7 +42,7 @@ globals:
   - id: presets
     type: std::array<float, 6>
     restore_value: true
-    initial_value: '{{88.1f, 96.3f, 97.1f, 99.5f, 101.9f, 102.7f}}'
+    initial_value: 'std::array<float, 6>{88.1f, 96.3f, 97.1f, 99.5f, 101.9f, 102.7f}'
 
 si4703:
   id: radio
