@@ -1,0 +1,58 @@
+# QuinLED-ESP32 (D1 Mini32 form factor) + SparkFun Si4703 FM tuner (WRL-12938), Wi-Fi
+#
+# Wiring (D1-Mini position -> ESP32 GPIO -> Si4703) - same harness positions as the D1 Mini Pro:
+#   "D2" -> GPIO21 -> SDIO
+#   "D1" -> GPIO22 -> SCLK
+#   "D5" -> GPIO18 -> RST
+#   3V3            -> 3.3V
+#   GND            -> GND
+#   SEN            -> leave UNCONNECTED (SparkFun board pulls it high = I2C mode). Do NOT ground it.
+#   Headphones in the 3.5mm jack (the headphone cord is the antenna)
+
+substitutions:
+  name: quinled-fm-radio
+  friendly_name: QuinLED FM Radio
+  sdio_pin: GPIO21
+  sclk_pin: GPIO22
+  reset_pin: GPIO18
+  start_frequency: "88.1"     # used only on the very first boot
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+
+esp32:
+  board: mhetesp32minikit
+  framework:
+    type: arduino
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  ap:
+    ssid: "${friendly_name} Fallback"
+
+captive_portal:
+
+logger:
+  level: DEBUG
+
+api:
+
+ota:
+  - platform: esphome
+
+web_server:
+  port: 80
+
+status_led:
+  pin:
+    number: GPIO2             # QuinLED-ESP32 on-board LED, active low
+    inverted: true
+
+packages:
+  fm_radio:
+    url: https://github.com/lilmansplace/esphome-components
+    ref: main
+    files: [components/si4703/radio-common.yaml]
+    refresh: 0s

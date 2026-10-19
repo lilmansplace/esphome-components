@@ -1,0 +1,235 @@
+# Shared Si4703 FM radio package (board-independent).
+# Include from a board file that defines these substitutions:
+#   sdio_pin, sclk_pin, reset_pin, start_frequency
+# Provides: tuning, volume, mute/mono, seek, RDS station name + text, signal strength,
+# 6 presets (drop-down + Tune/Store/Next/Previous), and restores last station/volume on boot.
+
+esphome:
+  on_boot:
+    priority: -100
+    then:
+      - lambda: |-
+          id(radio).set_volume(id(last_volume));
+          id(radio).set_frequency(id(last_frequency));
+          id(volume_number).publish_state(id(last_volume));
+          id(freq_number).publish_state(id(last_frequency));
+      - component.update: preset_info
+      - component.update: preset_list
+
+external_components:
+  - source: github://lilmansplace/esphome-components@main
+    components: [si4703]
+    refresh: 0s
+
+i2c:
+  id: i2c_bus
+  sda:
+    number: ${sdio_pin}
+    allow_other_uses: true   # shared with si4703 sdio_pin (used only during reset)
+  scl: ${sclk_pin}
+  frequency: 100kHz
+  scan: true
+
+globals:
+  - id: last_frequency
+    type: float
+    restore_value: true
+    initial_value: '${start_frequency}'
+  - id: last_volume
+    type: int
+    restore_value: true
+    initial_value: '8'
+  - id: presets
+    type: std::array<float, 6>
+    restore_value: true
+    initial_value: '{{88.1f, 96.3f, 97.1f, 99.5f, 101.9f, 102.7f}}'
+
+si4703:
+  id: radio
+  reset_pin: ${reset_pin}
+  sdio_pin:
+    number: ${sdio_pin}
+    allow_other_uses: true
+  frequency: ${start_frequency}
+  volume: 8
+  de_emphasis: 75us          # Americas
+  seek_threshold: 10         # 0-127; lower finds weaker stations
+  frequency_sensor:
+    name: "Tuned Frequency"
+    id: tuned_frequency
+    on_value:
+      - lambda: |-
+          id(freq_number).publish_state(x);
+          id(last_frequency) = x;
+  rssi_sensor:
+    name: "Signal Strength"
+  station_name:
+    name: "Station Name"
+  radio_text:
+    name: "Radio Text"
+
+number:
+  - platform: template
+    name: "Frequency"
+    id: freq_number
+    icon: mdi:radio-fm
+    unit_of_measurement: MHz
+    min_value: 87.5
+    max_value: 108.0
+    step: 0.1
+    mode: box
+    optimistic: true
+    set_action:
+      - lambda: 'id(radio).set_frequency(x);'
+
+  - platform: template
+    name: "Volume"
+    id: volume_number
+    icon: mdi:volume-high
+    min_value: 0
+    max_value: 15
+    step: 1
+    mode: slider
+    optimistic: true
+    set_action:
+      - lambda: |-
+          id(radio).set_volume((uint8_t) x);
+          id(last_volume) = (int) x;
+
+select:
+  - platform: template
+    name: "Preset"
+    id: preset_select
+    icon: mdi:playlist-star
+    optimistic: true
+    restore_value: true
+    options:
+      - "Preset 1"
+      - "Preset 2"
+      - "Preset 3"
+      - "Preset 4"
+      - "Preset 5"
+      - "Preset 6"
+    initial_option: "Preset 1"
+    on_value:
+      - component.update: preset_info
+
+button:
+  - platform: template
+    name: "Tune Preset"
+    icon: mdi:radio
+    on_press:
+      - lambda: |-
+          auto idx = id(preset_select).active_index();
+          if (!idx.has_value()) return;
+          float f = id(presets)[*idx];
+          ESP_LOGI("preset", "Tuning to preset %u: %.1f MHz", (unsigned) (*idx + 1), f);
+          id(radio).set_frequency(f);
+
+  - platform: template
+    name: "Store Preset"
+    icon: mdi:content-save
+    on_press:
+      - lambda: |-
+          auto idx = id(preset_select).active_index();
+          if (!idx.has_value()) return;
+          float f = id(radio).get_frequency();
+          id(presets)[*idx] = f;
+          ESP_LOGI("preset", "Stored %.1f MHz in preset %u", f, (unsigned) (*idx + 1));
+      - component.update: preset_info
+      - component.update: preset_list
+
+  - platform: template
+    name: "Next Preset"
+    icon: mdi:skip-forward
+    on_press:
+      - select.next:
+          id: preset_select
+          cycle: true
+      - lambda: |-
+          auto idx = id(preset_select).active_index();
+          if (idx.has_value()) id(radio).set_frequency(id(presets)[*idx]);
+
+  - platform: template
+    name: "Previous Preset"
+    icon: mdi:skip-backward
+    on_press:
+      - select.previous:
+          id: preset_select
+          cycle: true
+      - lambda: |-
+          auto idx = id(preset_select).active_index();
+          if (idx.has_value()) id(radio).set_frequency(id(presets)[*idx]);
+
+  - platform: template
+    name: "Seek Up"
+    icon: mdi:fast-forward
+    on_press:
+      - lambda: 'id(radio).seek_up();'
+
+  - platform: template
+    name: "Seek Down"
+    icon: mdi:rewind
+    on_press:
+      - lambda: 'id(radio).seek_down();'
+
+  - platform: restart
+    name: "Restart"
+
+  - platform: template
+    name: "Dump Registers"
+    icon: mdi:bug
+    entity_category: diagnostic
+    on_press:
+      - lambda: 'id(radio).log_registers();'
+
+text_sensor:
+  - platform: template
+    name: "Preset Frequency"
+    id: preset_info
+    icon: mdi:playlist-star
+    update_interval: never
+    lambda: |-
+      auto idx = id(preset_select).active_index();
+      if (!idx.has_value()) return {""};
+      char buf[32];
+      snprintf(buf, sizeof(buf), "Preset %u: %.1f MHz", (unsigned) (*idx + 1), id(presets)[*idx]);
+      return {std::string(buf)};
+
+  - platform: template
+    name: "Preset List"
+    id: preset_list
+    icon: mdi:format-list-numbered
+    update_interval: never
+    lambda: |-
+      std::string out;
+      char buf[16];
+      for (size_t i = 0; i < id(presets).size(); i++) {
+        snprintf(buf, sizeof(buf), "%s%u: %.1f", i ? " | " : "", (unsigned) (i + 1), id(presets)[i]);
+        out += buf;
+      }
+      return {out};
+
+switch:
+  - platform: template
+    name: "Mute"
+    icon: mdi:volume-off
+    lambda: 'return id(radio).is_muted();'
+    turn_on_action:
+      - lambda: 'id(radio).mute();'
+    turn_off_action:
+      - lambda: 'id(radio).unmute();'
+  - platform: template
+    name: "Force Mono"
+    icon: mdi:speaker
+    lambda: 'return id(radio).is_mono();'
+    turn_on_action:
+      - lambda: 'id(radio).set_mono(true);'
+    turn_off_action:
+      - lambda: 'id(radio).set_mono(false);'
+
+binary_sensor:
+  - platform: template
+    name: "Stereo"
+    icon: mdi:surround-sound
+    lambda: 'return id(radio).is_stereo();'

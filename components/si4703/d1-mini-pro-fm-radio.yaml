@@ -1,0 +1,57 @@
+# Wemos D1 Mini Pro (ESP8266) + SparkFun Si4703 FM tuner (WRL-12938), Wi-Fi
+#
+# Wiring (D1 Mini label -> GPIO -> Si4703):
+#   D2 -> GPIO4  -> SDIO
+#   D1 -> GPIO5  -> SCLK
+#   D5 -> GPIO14 -> RST
+#   3V3          -> 3.3V
+#   G            -> GND
+#   SEN          -> leave UNCONNECTED (SparkFun board pulls it high = I2C mode). Do NOT ground it.
+#   Headphones in the 3.5mm jack (the headphone cord is the antenna)
+
+substitutions:
+  name: d1-fm-radio
+  friendly_name: D1 FM Radio
+  sdio_pin: GPIO4
+  sclk_pin: GPIO5
+  reset_pin: GPIO14
+  start_frequency: "88.1"     # used only on the very first boot
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+
+esp8266:
+  board: d1_mini_pro
+  restore_from_flash: true    # keep presets / last station across power cycles
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  ap:
+    ssid: "${friendly_name} Fallback"
+
+captive_portal:
+
+logger:
+  level: DEBUG
+
+api:
+
+ota:
+  - platform: esphome
+
+web_server:
+  port: 80
+
+status_led:
+  pin:
+    number: GPIO2             # on-board LED (D4), active low
+    inverted: true
+
+packages:
+  fm_radio:
+    url: https://github.com/lilmansplace/esphome-components
+    ref: main
+    files: [components/si4703/radio-common.yaml]
+    refresh: 0s
