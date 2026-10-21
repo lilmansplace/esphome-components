@@ -1,25 +1,28 @@
-# Shared Si4703 FM radio package (board-independent).
+# Shared Si4703 FM radio package (board-independent) - upstream-style component.
 # Include from a board file that defines these substitutions:
 #   sdio_pin, sclk_pin, reset_pin, start_frequency
+# Optional: region (americas | europe | australia | japan | japan_wide), default americas.
 # Provides: tuning, volume, mute/mono, seek, RDS station name + text, signal strength,
-# 6 presets (drop-down + Tune/Store/Next/Previous), and restores last station/volume on boot.
+# 6 presets (drop-down + Tune/Store/Next/Previous), "Auto-program Presets" (band scan,
+# strongest 6 stations), and restores last station/volume/seek threshold on boot.
+
+substitutions:
+  region: americas
 
 esphome:
   on_boot:
     priority: -100
     then:
+      # Values set before the tuner finishes powering up are applied when it does
       - lambda: |-
           id(radio).set_seek_threshold(id(last_seek_threshold));
-          id(seek_threshold_number).publish_state(id(last_seek_threshold));
           id(radio).set_volume(id(last_volume));
           id(radio).set_frequency(id(last_frequency));
-          id(volume_number).publish_state(id(last_volume));
-          id(freq_number).publish_state(id(last_frequency));
       - component.update: preset_info
       - component.update: preset_list
 
 external_components:
-  - source: github://lilmansplace/esphome-components@main
+  - source: github://lilmansplace/esphome-components@si4703-upstream
     components: [si4703]
     refresh: 0s
 
@@ -56,67 +59,116 @@ si4703:
   sdio_pin:
     number: ${sdio_pin}
     allow_other_uses: true
+  region: ${region}
   frequency: ${start_frequency}
   volume: 8
-  de_emphasis: 75us          # Americas
-  seek_threshold: 10         # 0-127; lower finds weaker stations
-  frequency_sensor:
-    name: "Tuned Frequency"
-    id: tuned_frequency
-    on_value:
-      - lambda: |-
-          id(freq_number).publish_state(x);
-          id(last_frequency) = x;
-  rssi_sensor:
-    name: "Signal Strength"
-  station_name:
-    name: "Station Name"
-  radio_text:
-    name: "Radio Text"
+  on_scan_complete:
+    - lambda: |-
+        const uint8_t n = id(radio).get_scan_count();
+        if (n == 0) {
+          ESP_LOGW("preset", "Scan found no stations - presets unchanged (try a lower Seek Threshold)");
+          return;
+        }
+        // Results arrive strongest first; keep the top 6, then order them by frequency
+        const uint8_t k = n < 6 ? n : 6;
+        std::array<float, 6> top{};
+        for (uint8_t i = 0; i < k; i++)
+          top[i] = id(radio).get_scan_frequency(i);
+        std::sort(top.begin(), top.begin() + k);
+        for (uint8_t i = 0; i < k; i++) {
+          id(presets)[i] = top[i];
+          ESP_LOGI("preset", "Preset %u = %.1f MHz", (unsigned) (i + 1), top[i]);
+        }
+    - component.update: preset_info
+    - component.update: preset_list
+    - component.update: scan_results
+
+sensor:
+  - platform: si4703
+    frequency:
+      name: "Tuned Frequency"
+      on_value:
+        - lambda: 'id(last_frequency) = x;'
+    rssi:
+      name: "Signal Strength"
+
+text_sensor:
+  - platform: si4703
+    station_name:
+      name: "Station Name"
+    radio_text:
+      name: "Radio Text"
+
+  - platform: template
+    name: "Preset Frequency"
+    id: preset_info
+    icon: mdi:playlist-star
+    update_interval: never
+    lambda: |-
+      auto idx = id(preset_select).active_index();
+      if (!idx.has_value()) return {""};
+      char buf[32];
+      snprintf(buf, sizeof(buf), "Preset %u: %.1f MHz", (unsigned) (*idx + 1), id(presets)[*idx]);
+      return {std::string(buf)};
+
+  - platform: template
+    name: "Preset List"
+    id: preset_list
+    icon: mdi:format-list-numbered
+    update_interval: never
+    lambda: |-
+      std::string out;
+      char buf[16];
+      for (size_t i = 0; i < id(presets).size(); i++) {
+        snprintf(buf, sizeof(buf), "%s%u: %.1f", i ? " | " : "", (unsigned) (i + 1), id(presets)[i]);
+        out += buf;
+      }
+      return {out};
+
+  - platform: template
+    name: "Scan Results"
+    id: scan_results
+    icon: mdi:radar
+    entity_category: diagnostic
+    update_interval: never
+    lambda: |-
+      std::string out;
+      char buf[24];
+      const uint8_t n = id(radio).get_scan_count();
+      for (uint8_t i = 0; i < n && out.size() < 230; i++) {
+        snprintf(buf, sizeof(buf), "%s%.1f (%u)", i ? ", " : "", id(radio).get_scan_frequency(i),
+                 id(radio).get_scan_rssi(i));
+        out += buf;
+      }
+      return {n ? out : std::string("none")};
+
+binary_sensor:
+  - platform: si4703
+    stereo:
+      name: "Stereo"
 
 number:
-  - platform: template
-    name: "Seek Threshold"
-    id: seek_threshold_number
-    icon: mdi:tune-variant
-    entity_category: config
-    unit_of_measurement: dBµV
-    min_value: 0
-    max_value: 50
-    step: 1
-    mode: slider
-    optimistic: true
-    set_action:
-      - lambda: |-
-          id(radio).set_seek_threshold((uint8_t) x);
-          id(last_seek_threshold) = (int) x;
+  - platform: si4703
+    frequency:
+      name: "Frequency"
+      mode: box
+    volume:
+      name: "Volume"
+      mode: slider
+      on_value:
+        - lambda: 'id(last_volume) = (int) x;'
+    seek_threshold:
+      name: "Seek Threshold"
+      mode: slider
+      on_value:
+        - lambda: 'id(last_seek_threshold) = (int) x;'
 
-  - platform: template
-    name: "Frequency"
-    id: freq_number
-    icon: mdi:radio-fm
-    unit_of_measurement: MHz
-    min_value: 87.5
-    max_value: 108.0
-    step: 0.1
-    mode: box
-    optimistic: true
-    set_action:
-      - lambda: 'id(radio).set_frequency(x);'
-
-  - platform: template
-    name: "Volume"
-    id: volume_number
-    icon: mdi:volume-high
-    min_value: 0
-    max_value: 15
-    step: 1
-    mode: slider
-    optimistic: true
-    set_action:
-      - lambda: |-
-          id(radio).set_volume((uint8_t) x);
-          id(last_volume) = (int) x;
+switch:
+  - platform: si4703
+    mute:
+      name: "Mute"
+    mono:
+      name: "Force Mono"
 
 select:
   - platform: template
@@ -137,6 +189,14 @@ select:
       - component.update: preset_info
 
 button:
+  - platform: si4703
+    seek_up:
+      name: "Seek Up"
+    seek_down:
+      name: "Seek Down"
+    scan:
+      name: "Auto-program Presets"
+
   - platform: template
     name: "Tune Preset"
     icon: mdi:radio
@@ -183,75 +243,5 @@ button:
           auto idx = id(preset_select).active_index();
           if (idx.has_value()) id(radio).set_frequency(id(presets)[*idx]);
 
-  - platform: template
-    name: "Seek Up"
-    icon: mdi:fast-forward
-    on_press:
-      - lambda: 'id(radio).seek_up();'
-
-  - platform: template
-    name: "Seek Down"
-    icon: mdi:rewind
-    on_press:
-      - lambda: 'id(radio).seek_down();'
-
   - platform: restart
     name: "Restart"
-
-  - platform: template
-    name: "Dump Registers"
-    icon: mdi:bug
-    entity_category: diagnostic
-    on_press:
-      - lambda: 'id(radio).log_registers();'
-
-text_sensor:
-  - platform: template
-    name: "Preset Frequency"
-    id: preset_info
-    icon: mdi:playlist-star
-    update_interval: never
-    lambda: |-
-      auto idx = id(preset_select).active_index();
-      if (!idx.has_value()) return {""};
-      char buf[32];
-      snprintf(buf, sizeof(buf), "Preset %u: %.1f MHz", (unsigned) (*idx + 1), id(presets)[*idx]);
-      return {std::string(buf)};
-
-  - platform: template
-    name: "Preset List"
-    id: preset_list
-    icon: mdi:format-list-numbered
-    update_interval: never
-    lambda: |-
-      std::string out;
-      char buf[16];
-      for (size_t i = 0; i < id(presets).size(); i++) {
-        snprintf(buf, sizeof(buf), "%s%u: %.1f", i ? " | " : "", (unsigned) (i + 1), id(presets)[i]);
-        out += buf;
-      }
-      return {out};
-
-switch:
-  - platform: template
-    name: "Mute"
-    icon: mdi:volume-off
-    lambda: 'return id(radio).is_muted();'
-    turn_on_action:
-      - lambda: 'id(radio).mute();'
-    turn_off_action:
-      - lambda: 'id(radio).unmute();'
-  - platform: template
-    name: "Force Mono"
-    icon: mdi:speaker
-    lambda: 'return id(radio).is_mono();'
-    turn_on_action:
-      - lambda: 'id(radio).set_mono(true);'
-    turn_off_action:
-      - lambda: 'id(radio).set_mono(false);'
-
-binary_sensor:
-  - platform: template
-    name: "Stereo"
-    icon: mdi:surround-sound
-    lambda: 'return id(radio).is_stereo();'

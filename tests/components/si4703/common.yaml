@@ -1,0 +1,74 @@
+i2c:
+  - id: i2c_si4703
+    sda:
+      number: ${sda_pin}
+      allow_other_uses: true
+    scl: ${scl_pin}
+
+si4703:
+  id: radio
+  reset_pin: ${reset_pin}
+  sdio_pin:
+    number: ${sda_pin}
+    allow_other_uses: true
+  region: europe
+  frequency: 98.5
+  volume: 8
+  on_scan_complete:
+    - logger.log:
+        format: "Found %u stations"
+        args: ["id(radio).get_scan_count()"]
+
+sensor:
+  - platform: si4703
+    frequency:
+      name: Tuned Frequency
+    rssi:
+      name: Signal Strength
+
+binary_sensor:
+  - platform: si4703
+    stereo:
+      name: Stereo
+
+text_sensor:
+  - platform: si4703
+    station_name:
+      name: Station Name
+    radio_text:
+      name: Radio Text
+
+number:
+  - platform: si4703
+    frequency:
+      name: Frequency
+    volume:
+      name: Volume
+    seek_threshold:
+      name: Seek Threshold
+
+switch:
+  - platform: si4703
+    mute:
+      name: Mute
+    mono:
+      name: Force Mono
+
+button:
+  - platform: si4703
+    seek_up:
+      name: Seek Up
+    seek_down:
+      name: Seek Down
+    scan:
+      name: Scan Band
+  - platform: template
+    name: Tune 101.1
+    on_press:
+      - si4703.tune:
+          frequency: 101.1
+      - si4703.set_volume:
+          volume: 10
+      - si4703.seek_up: radio
+      - si4703.seek_down: radio
+      - si4703.scan: radio

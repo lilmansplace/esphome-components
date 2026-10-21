@@ -48,6 +48,6 @@ web_server:
 packages:
   fm_radio:
     url: https://github.com/lilmansplace/esphome-components
-    ref: main
+    ref: si4703-upstream
     files: [components/si4703/radio-common.yaml]
     refresh: 0s

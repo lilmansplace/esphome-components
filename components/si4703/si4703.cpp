@@ -1,277 +1,520 @@
 #include "si4703.h"
+
+#include "esphome/core/application.h"
 #include "esphome/core/hal.h"
+#include "esphome/core/helpers.h"
 #include "esphome/core/log.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 
-namespace esphome {
-namespace si4703 {
+namespace esphome::si4703 {
 
 static const char *const TAG = "si4703";
 
-// Register indexes
-static const uint8_t REG_DEVICEID = 0x00;
-static const uint8_t REG_CHIPID = 0x01;
-static const uint8_t REG_POWERCFG = 0x02;
-static const uint8_t REG_CHANNEL = 0x03;
-static const uint8_t REG_SYSCONFIG1 = 0x04;
-static const uint8_t REG_SYSCONFIG2 = 0x05;
-static const uint8_t REG_SYSCONFIG3 = 0x06;
-static const uint8_t REG_TEST1 = 0x07;
-static const uint8_t REG_STATUSRSSI = 0x0A;
-static const uint8_t REG_READCHAN = 0x0B;
-static const uint8_t REG_RDSA = 0x0C;
-static const uint8_t REG_RDSB = 0x0D;
-static const uint8_t REG_RDSC = 0x0E;
-static const uint8_t REG_RDSD = 0x0F;
+// Register indexes (16-bit registers)
+static constexpr uint8_t REG_DEVICEID = 0x00;
+static constexpr uint8_t REG_CHIPID = 0x01;
+static constexpr uint8_t REG_POWERCFG = 0x02;
+static constexpr uint8_t REG_CHANNEL = 0x03;
+static constexpr uint8_t REG_SYSCONFIG1 = 0x04;
+static constexpr uint8_t REG_SYSCONFIG2 = 0x05;
+static constexpr uint8_t REG_SYSCONFIG3 = 0x06;
+static constexpr uint8_t REG_TEST1 = 0x07;
+static constexpr uint8_t REG_STATUSRSSI = 0x0A;
+static constexpr uint8_t REG_READCHAN = 0x0B;
+static constexpr uint8_t REG_RDSB = 0x0D;
+static constexpr uint8_t REG_RDSC = 0x0E;
+static constexpr uint8_t REG_RDSD = 0x0F;
 
-static const uint16_t EXPECTED_DEVICEID = 0x1242;
+static constexpr uint16_t EXPECTED_DEVICEID = 0x1242;
 
 // POWERCFG (0x02)
-static const uint16_t PWR_DSMUTE = 1 << 15;
-static const uint16_t PWR_DMUTE = 1 << 14;
-static const uint16_t PWR_MONO = 1 << 13;
-static const uint16_t PWR_RDSM = 1 << 11;    // RDS verbose mode: report block error levels
-static const uint16_t PWR_SKMODE = 1 << 10;  // 1 = stop at band limit, 0 = wrap
-static const uint16_t PWR_SEEKUP = 1 << 9;
-static const uint16_t PWR_SEEK = 1 << 8;
-static const uint16_t PWR_DISABLE = 1 << 6;
-static const uint16_t PWR_ENABLE = 1 << 0;
+static constexpr uint16_t PWR_DMUTE = 1 << 14;
+static constexpr uint16_t PWR_MONO = 1 << 13;
+static constexpr uint16_t PWR_RDSM = 1 << 11;  // RDS verbose mode: block error levels in READCHAN
+static constexpr uint16_t PWR_SKMODE = 1 << 10;
+static constexpr uint16_t PWR_SEEKUP = 1 << 9;
+static constexpr uint16_t PWR_SEEK = 1 << 8;
+static constexpr uint16_t PWR_ENABLE = 1 << 0;
 // CHANNEL (0x03)
-static const uint16_t CHAN_TUNE = 1 << 15;
+static constexpr uint16_t CHAN_TUNE = 1 << 15;
+static constexpr uint16_t CHAN_MASK = 0x03FF;
 // SYSCONFIG1 (0x04)
-static const uint16_t SC1_RDS = 1 << 12;
-static const uint16_t SC1_DE = 1 << 11;  // 1 = 50us, 0 = 75us
+static constexpr uint16_t SC1_RDS = 1 << 12;
+static constexpr uint16_t SC1_DE = 1 << 11;
 // SYSCONFIG2 (0x05): SEEKTH[15:8] BAND[7:6] SPACE[5:4] VOLUME[3:0]
-static const uint16_t SC2_SPACE_100K = 0x01 << 4;
-// SYSCONFIG3 (0x06): SKSNR[7:4] SKCNT[3:0]
-static const uint16_t SC3_SEEK_DEFAULTS = (4 << 4) | 8;
-// TEST1 (0x07)
-static const uint16_t TEST1_XOSCEN = 0x8100;  // AN230: crystal on (SparkFun board has a 32.768kHz crystal)
+static constexpr uint16_t SC2_VOLUME_MASK = 0x000F;
+// SYSCONFIG3 (0x06): SKSNR[7:4] = 4, SKCNT[3:0] = 8 (AN230 recommended seek settings)
+static constexpr uint16_t SC3_SEEK_DEFAULTS = 0x0048;
+// TEST1 (0x07): XOSCEN, AN230 crystal start value
+static constexpr uint16_t TEST1_XOSCEN = 0x8100;
 // STATUSRSSI (0x0A)
-static const uint16_t ST_RDSR = 1 << 15;
-static const uint16_t ST_STC = 1 << 14;
-static const uint16_t ST_SFBL = 1 << 13;
-static const uint16_t ST_ST = 1 << 8;
-// READCHAN (0x0B) block error bits for B, C, D
-// READCHAN (0x0B) block error levels (verbose mode): BLERB[15:14] BLERC[13:12] BLERD[11:10]
-// 0 = no errors, 1 = 1-2 corrected, 2 = 3-5 corrected, 3 = uncorrectable
+static constexpr uint16_t ST_RDSR = 1 << 15;
+static constexpr uint16_t ST_STC = 1 << 14;
+static constexpr uint16_t ST_SFBL = 1 << 13;
+static constexpr uint16_t ST_ST = 1 << 8;
+static constexpr uint16_t ST_RSSI_MASK = 0x00FF;
 
-static const float BAND_BOTTOM = 87.5f;   // BAND = 00 : 87.5 - 108 MHz
-static const float CHANNEL_STEP = 0.1f;   // SPACE = 01: 100 kHz
-static const uint32_t POLL_INTERVAL_MS = 20;  // RDS groups arrive every ~88 ms; RDSR stays up ~40 ms
-static const uint32_t RSSI_PUBLISH_MS = 2000;
-static const uint32_t SEEK_TIMEOUT_MS = 10000;
-static const uint8_t MAX_INIT_ATTEMPTS = 5;
+// Timing
+static constexpr uint32_t POLL_INTERVAL_MS = 20;  // RDS groups arrive every ~88 ms
+static constexpr uint32_t RSSI_PUBLISH_INTERVAL_MS = 2000;
+static constexpr uint32_t SETTLE_MS = 500;  // RSSI/stereo settle time after a tune
+static constexpr uint32_t TUNE_TIMEOUT_MS = 500;
+static constexpr uint32_t SEEK_TIMEOUT_MS = 10000;
+static constexpr uint32_t CLEAR_TIMEOUT_MS = 200;
+static constexpr uint32_t OSCILLATOR_DELAY_MS = 600;  // AN230: >= 500 ms
+static constexpr uint32_t POWERUP_DELAY_MS = 120;     // datasheet powerup time 110 ms
+static constexpr uint8_t MAX_INIT_ATTEMPTS = 5;
 
-// Must run before the I2C bus (priority BUS) so we can drive SDIO as a plain GPIO during reset.
-float Si4703Component::get_setup_priority() const { return setup_priority::BUS + 1.0f; }
+static constexpr uint8_t RDS_UNCORRECTABLE = 3;
+
+static const char *band_to_str(Band band) {
+  switch (band) {
+    case BAND_76_108:
+      return "76-108 MHz";
+    case BAND_76_90:
+      return "76-90 MHz";
+    default:
+      return "87.5-108 MHz";
+  }
+}
+
+float Si4703Component::get_band_min() const { return this->band_ == BAND_87_5_108 ? 87.5f : 76.0f; }
+float Si4703Component::get_band_max() const { return this->band_ == BAND_76_90 ? 90.0f : 108.0f; }
+float Si4703Component::get_channel_step() const {
+  switch (this->spacing_) {
+    case SPACING_200KHZ:
+      return 0.2f;
+    case SPACING_50KHZ:
+      return 0.05f;
+    default:
+      return 0.1f;
+  }
+}
 
 void Si4703Component::setup() {
-  ESP_LOGCONFIG(TAG, "Setting up Si4703...");
+#ifdef USE_NUMBER
+  if (this->frequency_number_ != nullptr) {
+    this->frequency_number_->traits.set_min_value(this->get_band_min());
+    this->frequency_number_->traits.set_max_value(this->get_band_max());
+    this->frequency_number_->traits.set_step(this->get_channel_step());
+  }
+#endif
   this->hardware_reset_();
-  // The I2C bus is initialised after us; finish chip init once everything is set up.
-  this->set_timeout("init", 50, [this]() { this->init_stage1_(); });
+  // The I2C bus is initialised after this component; continue once it is up.
+  this->set_timeout(50, [this]() { this->init_verify_(); });
 }
 
 void Si4703Component::hardware_reset_() {
-  // Si4702/03 latch the bus mode on the rising edge of RST.
-  // 2-wire (I2C) mode needs SEN high (SparkFun board pulls SEN up) and SDIO LOW at that moment.
-  // SparkFun's board also pulls SDIO up, so we must actively hold it low.
+  // The Si4702/03 latches its bus mode on the rising edge of RST. 2-wire (I2C) mode requires
+  // SEN high and SDIO low at that moment. Breakout boards usually pull SDIO up, so drive it low.
   this->reset_pin_->setup();
   this->reset_pin_->digital_write(false);
   if (this->sdio_pin_ != nullptr) {
     this->sdio_pin_->setup();
     this->sdio_pin_->pin_mode(gpio::FLAG_OUTPUT);
     this->sdio_pin_->digital_write(false);
-  } else {
-    ESP_LOGW(TAG, "No sdio_pin configured - relying on SDIO being low at reset (may land in 3-wire mode)");
   }
-  delay(10);
-  this->reset_pin_->digital_write(true);  // latch 2-wire mode
-  delay(2);
+  delay(1);
+  this->reset_pin_->digital_write(true);
+  delay(1);
   if (this->sdio_pin_ != nullptr) {
-    this->sdio_pin_->pin_mode(gpio::FLAG_INPUT);  // release SDIO for the I2C driver
+    this->sdio_pin_->pin_mode(gpio::FLAG_INPUT);  // hand SDIO back to the I2C bus
   }
-  ESP_LOGD(TAG, "Hardware reset done (SDIO held low while RST released)");
 }
 
-void Si4703Component::init_stage1_() {
+void Si4703Component::init_verify_() {
   this->init_attempts_++;
   if (!this->read_all_() || this->registers_[REG_DEVICEID] != EXPECTED_DEVICEID) {
-    ESP_LOGE(TAG, "Si4703 not responding correctly (attempt %u/%u): DEVICEID=0x%04X CHIPID=0x%04X (expected DEVICEID 0x1242)",
-             this->init_attempts_, MAX_INIT_ATTEMPTS, this->registers_[REG_DEVICEID], this->registers_[REG_CHIPID]);
+    ESP_LOGW(TAG, "No response (attempt %u/%u): DEVICEID=0x%04X", this->init_attempts_, MAX_INIT_ATTEMPTS,
+             this->registers_[REG_DEVICEID]);
     if (this->init_attempts_ >= MAX_INIT_ATTEMPTS) {
-      ESP_LOGE(TAG, "Giving up. Check: SEN not grounded (must be high), SDIO/SCLK/RST wiring, 3.3V supply.");
-      this->mark_failed();
+      this->mark_failed(LOG_STR("Si4703 not found; check SEN is high and SDIO is held low during reset"));
       return;
     }
-    // Just retry the read. Do NOT pulse RST here: SDIO idles high now, so a reset would latch 3-wire mode.
-    this->set_timeout("init", 1000, [this]() { this->init_stage1_(); });
+    // Do not pulse RST here: SDIO idles high now, which would latch 3-wire mode.
+    this->set_timeout(1000, [this]() { this->init_verify_(); });
     return;
   }
-  ESP_LOGI(TAG, "Found Si4703: DEVICEID=0x%04X CHIPID=0x%04X", this->registers_[REG_DEVICEID],
-           this->registers_[REG_CHIPID]);
-
-  // Start the 32.768 kHz crystal oscillator and wait >= 500 ms (AN230).
+  // Start the 32.768 kHz crystal oscillator
   this->registers_[REG_TEST1] = TEST1_XOSCEN;
-  if (!this->write_regs_()) {
-    ESP_LOGE(TAG, "Failed to enable crystal oscillator");
-    this->mark_failed();
+  if (!this->write_registers_()) {
+    this->mark_failed(LOG_STR("Failed to enable oscillator"));
     return;
   }
-  this->set_timeout("init", 600, [this]() { this->init_stage2_(); });
+  this->set_timeout(OSCILLATOR_DELAY_MS, [this]() { this->init_power_up_(); });
 }
 
-void Si4703Component::init_stage2_() {
+void Si4703Component::init_power_up_() {
   if (!this->read_all_()) {
-    ESP_LOGE(TAG, "Read failed after oscillator start");
-    this->mark_failed();
+    this->mark_failed(LOG_STR("Read failed after oscillator start"));
     return;
   }
-  ESP_LOGI(TAG, "Oscillator check: TEST1=0x%04X", this->registers_[REG_TEST1]);
-
   uint16_t pwr = PWR_ENABLE | PWR_RDSM;
   if (!this->muted_)
     pwr |= PWR_DMUTE;
-  if (this->current_mono_)
+  if (this->mono_)
     pwr |= PWR_MONO;
   this->registers_[REG_POWERCFG] = pwr;
   this->registers_[REG_SYSCONFIG1] = SC1_RDS | (this->de_50us_ ? SC1_DE : 0);
-  this->registers_[REG_SYSCONFIG2] =
-      (uint16_t(this->seek_threshold_) << 8) | SC2_SPACE_100K | (this->current_volume_ & 0x0F);
+  this->registers_[REG_SYSCONFIG2] = (uint16_t(this->seek_threshold_) << 8) | (uint16_t(this->band_) << 6) |
+                                     (uint16_t(this->spacing_) << 4) | (this->volume_ & SC2_VOLUME_MASK);
   this->registers_[REG_SYSCONFIG3] = SC3_SEEK_DEFAULTS;
-
-  if (!this->write_regs_()) {
-    ESP_LOGE(TAG, "Failed to power up Si4703");
-    this->mark_failed();
+  if (!this->write_registers_()) {
+    this->mark_failed(LOG_STR("Failed to power up"));
     return;
   }
+  this->set_timeout(POWERUP_DELAY_MS, [this]() { this->init_finish_(); });
+}
 
-  this->set_timeout("init", 120, [this]() {
-    this->read_all_();
-    this->ready_ = true;
-    ESP_LOGI(TAG, "Si4703 powered up (POWERCFG=0x%04X SYSCONFIG2=0x%04X)", this->registers_[REG_POWERCFG],
-             this->registers_[REG_SYSCONFIG2]);
-    this->set_frequency(this->initial_frequency_);
-    this->log_registers();
-  });
+void Si4703Component::init_finish_() {
+  this->read_all_();
+  this->state_ = State::IDLE;
+  ESP_LOGI(TAG, "Powered up (CHIPID 0x%04X)", this->registers_[REG_CHIPID]);
+#ifdef USE_NUMBER
+  if (this->volume_number_ != nullptr)
+    this->volume_number_->publish_state(this->volume_);
+  if (this->seek_threshold_number_ != nullptr)
+    this->seek_threshold_number_->publish_state(this->seek_threshold_);
+#endif
+#ifdef USE_SWITCH
+  if (this->mute_switch_ != nullptr)
+    this->mute_switch_->publish_state(this->muted_);
+  if (this->mono_switch_ != nullptr)
+    this->mono_switch_->publish_state(this->mono_);
+#endif
+  this->set_frequency(this->target_frequency_);
 }
 
 void Si4703Component::dump_config() {
-  ESP_LOGCONFIG(TAG, "Si4703 FM Tuner:");
+  ESP_LOGCONFIG(TAG,
+                "Si4703 FM Tuner:\n"
+                "  Band: %s, spacing %.0f kHz, de-emphasis %s\n"
+                "  Initial frequency: %.2f MHz, volume %u",
+                band_to_str(this->band_), this->get_channel_step() * 1000.0f, this->de_50us_ ? "50 us" : "75 us",
+                this->target_frequency_, this->volume_);
   LOG_I2C_DEVICE(this);
   LOG_PIN("  Reset Pin: ", this->reset_pin_);
   LOG_PIN("  SDIO Pin: ", this->sdio_pin_);
-  ESP_LOGCONFIG(TAG, "  Band: 87.5-108 MHz, 100 kHz spacing, de-emphasis %s", this->de_50us_ ? "50us" : "75us");
-  ESP_LOGCONFIG(TAG, "  Start frequency: %.1f MHz, volume %u", this->initial_frequency_, this->current_volume_);
-  if (this->is_failed()) {
-    ESP_LOGE(TAG, "  Communication with Si4703 failed!");
+  if (this->sdio_pin_ == nullptr) {
+    ESP_LOGW(TAG, "  No sdio_pin set: the chip may start in 3-wire mode on boards that pull SDIO high");
   }
+#ifdef USE_SENSOR
   LOG_SENSOR("  ", "Frequency", this->frequency_sensor_);
   LOG_SENSOR("  ", "RSSI", this->rssi_sensor_);
-  LOG_TEXT_SENSOR("  ", "Station Name", this->station_name_sensor_);
-  LOG_TEXT_SENSOR("  ", "Radio Text", this->radio_text_sensor_);
+#endif
+#ifdef USE_BINARY_SENSOR
+  LOG_BINARY_SENSOR("  ", "Stereo", this->stereo_binary_sensor_);
+#endif
+#ifdef USE_TEXT_SENSOR
+  LOG_TEXT_SENSOR("  ", "Station Name", this->station_name_text_sensor_);
+  LOG_TEXT_SENSOR("  ", "Radio Text", this->radio_text_text_sensor_);
+#endif
 }
 
+// ------------------------------------------------------------------ loop / state machine
+
 void Si4703Component::loop() {
-  if (!this->ready_)
+  if (this->state_ == State::INIT)
     return;
-  const uint32_t now = millis();
+  const uint32_t now = App.get_loop_component_start_time();
   if (now - this->last_poll_ < POLL_INTERVAL_MS)
     return;
   this->last_poll_ = now;
-
   if (!this->read_status_())
     return;
+  const bool stc = (this->registers_[REG_STATUSRSSI] & ST_STC) != 0;
 
-  if (this->seeking_) {
-    if (this->registers_[REG_STATUSRSSI] & ST_STC) {
-      this->finish_seek_();
-    } else if (now - this->seek_started_ > SEEK_TIMEOUT_MS) {
-      ESP_LOGW(TAG, "Seek timed out");
-      this->finish_seek_();
+  switch (this->state_) {
+    case State::TUNING:
+    case State::SEEKING: {
+      const bool seeking = this->state_ == State::SEEKING;
+      const uint32_t timeout = seeking ? SEEK_TIMEOUT_MS : TUNE_TIMEOUT_MS;
+      if (!stc && now - this->op_started_ < timeout)
+        break;
+      this->last_op_seek_ = seeking;
+      this->stc_rssi_ = this->registers_[REG_STATUSRSSI] & ST_RSSI_MASK;
+      this->stc_band_limit_ = !stc || (this->registers_[REG_STATUSRSSI] & ST_SFBL) != 0;
+      if (!stc) {
+        ESP_LOGW(TAG, "%s timed out", seeking ? "Seek" : "Tune");
+      } else if (seeking && this->stc_band_limit_ && !this->scanning_) {
+        ESP_LOGD(TAG, "Seek found no station above the threshold");
+      }
+      this->registers_[REG_POWERCFG] &= ~PWR_SEEK;
+      this->registers_[REG_CHANNEL] &= ~CHAN_TUNE;
+      this->write_registers_();
+      this->state_ = State::CLEARING;
+      this->op_started_ = now;
+      break;
     }
-    return;
+    case State::CLEARING:
+      if (stc && now - this->op_started_ < CLEAR_TIMEOUT_MS)
+        break;
+      this->state_ = State::IDLE;
+      if (this->scanning_) {
+        this->scan_step_();
+      } else {
+        this->complete_tune_();
+      }
+      break;
+    case State::IDLE:
+      this->update_from_status_();
+      this->process_rds_();
+      break;
+    default:
+      break;
   }
+}
 
-  this->process_rds_();
+void Si4703Component::update_from_status_() {
+  const uint32_t now = App.get_loop_component_start_time();
+  if (int32_t(now - this->settle_until_) < 0)
+    return;  // still settling after a tune
 
-  // Average RSSI over a 2 s window; publish only when it changes (or every 60 s)
-  this->rssi_sum_ += this->rssi_;
-  this->rssi_count_++;
-  if (now - this->last_rssi_publish_ >= RSSI_PUBLISH_MS) {
-    const int avg = static_cast<int>(std::lround(float(this->rssi_sum_) / float(this->rssi_count_)));
-    this->rssi_sum_ = 0;
-    this->rssi_count_ = 0;
-    const bool force = (now - this->last_rssi_forced_) >= 60000;
-    if (this->rssi_sensor_ != nullptr && (avg != this->last_rssi_published_ || force)) {
-      this->rssi_sensor_->publish_state(avg);
-      this->last_rssi_published_ = avg;
-      if (force)
-        this->last_rssi_forced_ = now;
+  const bool stereo = (this->registers_[REG_STATUSRSSI] & ST_ST) != 0;
+#ifdef USE_BINARY_SENSOR
+  if (this->stereo_binary_sensor_ != nullptr && (stereo != this->stereo_ || !this->stereo_binary_sensor_->has_state()))
+    this->stereo_binary_sensor_->publish_state(stereo);
+#endif
+  this->stereo_ = stereo;
+  this->rssi_ = this->registers_[REG_STATUSRSSI] & ST_RSSI_MASK;
+
+  if (this->last_published_rssi_ < 0 || now - this->last_rssi_publish_ >= RSSI_PUBLISH_INTERVAL_MS) {
+    if (this->last_published_rssi_ < 0) {
+      ESP_LOGI(TAG, "Tuned to %.2f MHz, RSSI %u dBuV, %s", this->frequency_, this->rssi_,
+               this->stereo_ ? "stereo" : "mono");
     }
     this->last_rssi_publish_ = now;
+    if (this->rssi_ != this->last_published_rssi_) {
+      this->last_published_rssi_ = this->rssi_;
+#ifdef USE_SENSOR
+      if (this->rssi_sensor_ != nullptr)
+        this->rssi_sensor_->publish_state(this->rssi_);
+#endif
+    }
   }
 }
 
-void Si4703Component::report_after_settle_(const char *what) {
-  // RSSI/stereo need a few hundred ms after a tune/seek to settle
-  this->set_timeout("settle", 500, [this, what]() {
-    if (!this->read_status_())
-      return;
-    ESP_LOGI(TAG, "%s %.1f MHz, RSSI %d dBuV, %s", what, this->current_frequency_, this->rssi_,
-             this->stereo_ ? "stereo" : "mono");
-    if (this->rssi_sensor_ != nullptr) {
-      this->rssi_sensor_->publish_state(this->rssi_);
-      this->last_rssi_published_ = this->rssi_;
-    }
-    this->rssi_sum_ = 0;
-    this->rssi_count_ = 0;
-  });
+void Si4703Component::complete_tune_() {
+  const uint16_t chan = this->registers_[REG_READCHAN] & CHAN_MASK;
+  const float mhz = this->get_band_min() + chan * this->get_channel_step();
+  this->frequency_ = std::round(mhz * 100.0f) / 100.0f;
+  this->target_frequency_ = this->frequency_;
+  this->settle_until_ = App.get_loop_component_start_time() + SETTLE_MS;
+  this->last_published_rssi_ = -1;  // report RSSI once settled
+  this->clear_rds_();
+  this->publish_tuned_();
 }
 
-// ---------------------------------------------------------------- I2C helpers
+void Si4703Component::publish_tuned_() {
+#ifdef USE_SENSOR
+  if (this->frequency_sensor_ != nullptr)
+    this->frequency_sensor_->publish_state(this->frequency_);
+#endif
+#ifdef USE_NUMBER
+  if (this->frequency_number_ != nullptr)
+    this->frequency_number_->publish_state(this->frequency_);
+#endif
+}
+
+// ------------------------------------------------------------------ control
+
+void Si4703Component::set_frequency(float mhz) {
+  if (this->scanning_) {
+    ESP_LOGI(TAG, "Scan cancelled");
+    this->scanning_ = false;
+    this->registers_[REG_POWERCFG] &= ~PWR_SKMODE;
+  }
+  const float lo = this->get_band_min();
+  const float hi = this->get_band_max();
+  if (mhz < lo || mhz > hi) {
+    ESP_LOGW(TAG, "%.2f MHz is outside the %s band", mhz, band_to_str(this->band_));
+    mhz = std::clamp(mhz, lo, hi);
+  }
+  this->target_frequency_ = mhz;
+  if (this->state_ == State::INIT)
+    return;  // applied when initialisation finishes
+  this->tune_(mhz);
+}
+
+void Si4703Component::tune_(float mhz) {
+  const float lo = this->get_band_min();
+  const uint16_t chan = static_cast<uint16_t>(std::lround((mhz - lo) / this->get_channel_step()));
+  ESP_LOGD(TAG, "Tuning to %.2f MHz (channel %u)", mhz, chan);
+  this->registers_[REG_POWERCFG] &= ~PWR_SEEK;  // abort a running seek
+  this->registers_[REG_CHANNEL] = CHAN_TUNE | (chan & CHAN_MASK);
+  if (!this->write_registers_())
+    return;
+  this->state_ = State::TUNING;
+  this->op_started_ = App.get_loop_component_start_time();
+}
+
+void Si4703Component::start_seek_(bool up) {
+  if (this->state_ != State::IDLE || this->scanning_) {
+    ESP_LOGW(TAG, "Busy, seek ignored");
+    return;
+  }
+  ESP_LOGD(TAG, "Seeking %s", up ? "up" : "down");
+  this->issue_seek_(up, false);
+}
+
+void Si4703Component::issue_seek_(bool up, bool stop_at_band_limit) {
+  this->registers_[REG_POWERCFG] &= ~(PWR_SKMODE | PWR_SEEKUP);
+  if (stop_at_band_limit)
+    this->registers_[REG_POWERCFG] |= PWR_SKMODE;
+  if (up)
+    this->registers_[REG_POWERCFG] |= PWR_SEEKUP;
+  this->registers_[REG_POWERCFG] |= PWR_SEEK;
+  if (!this->write_registers_())
+    return;
+  this->state_ = State::SEEKING;
+  this->op_started_ = App.get_loop_component_start_time();
+}
+
+// ------------------------------------------------------------------ band scan
+
+void Si4703Component::start_scan() {
+  if (this->state_ != State::IDLE || this->scanning_) {
+    ESP_LOGW(TAG, "Busy, scan ignored");
+    return;
+  }
+  ESP_LOGI(TAG, "Scanning %s (seek threshold %u dBuV)", band_to_str(this->band_), this->seek_threshold_);
+  this->scanning_ = true;
+  this->scan_count_ = 0;
+  this->scan_return_frequency_ = this->frequency_;
+  this->tune_(this->get_band_min());  // start at the bottom, then seek upward to the top
+}
+
+void Si4703Component::scan_step_() {
+  if (this->last_op_seek_) {
+    if (this->stc_band_limit_) {
+      this->finish_scan_();
+      return;
+    }
+    const uint16_t chan = this->registers_[REG_READCHAN] & CHAN_MASK;
+    const float mhz = std::round((this->get_band_min() + chan * this->get_channel_step()) * 100.0f) / 100.0f;
+    if (this->scan_count_ > 0 && this->scan_results_[this->scan_count_ - 1].frequency >= mhz) {
+      this->finish_scan_();  // wrapped or no progress
+      return;
+    }
+    this->scan_results_[this->scan_count_++] = {mhz, this->stc_rssi_};
+    ESP_LOGD(TAG, "Scan found %.2f MHz, RSSI %u dBuV", mhz, this->stc_rssi_);
+    if (this->scan_count_ >= MAX_SCAN_RESULTS) {
+      this->finish_scan_();
+      return;
+    }
+  }
+  this->issue_seek_(true, true);
+}
+
+void Si4703Component::finish_scan_() {
+  this->scanning_ = false;
+  this->registers_[REG_POWERCFG] &= ~PWR_SKMODE;
+  // Insertion sort, strongest first
+  for (uint8_t i = 1; i < this->scan_count_; i++) {
+    const ScanResult item = this->scan_results_[i];
+    int j = i - 1;
+    while (j >= 0 && this->scan_results_[j].rssi < item.rssi) {
+      this->scan_results_[j + 1] = this->scan_results_[j];
+      j--;
+    }
+    this->scan_results_[j + 1] = item;
+  }
+  ESP_LOGI(TAG, "Scan complete: %u stations", this->scan_count_);
+  for (uint8_t i = 0; i < this->scan_count_; i++)
+    ESP_LOGD(TAG, "  %.2f MHz  RSSI %u dBuV", this->scan_results_[i].frequency, this->scan_results_[i].rssi);
+  this->scan_complete_callback_.call();
+  this->tune_(this->scan_return_frequency_ > 0 ? this->scan_return_frequency_ : this->get_band_min());
+}
+
+void Si4703Component::set_volume(uint8_t volume) {
+  this->volume_ = volume > 15 ? 15 : volume;
+  if (this->state_ != State::INIT) {
+    this->registers_[REG_SYSCONFIG2] = (this->registers_[REG_SYSCONFIG2] & ~SC2_VOLUME_MASK) | this->volume_;
+    this->write_registers_();
+  }
+#ifdef USE_NUMBER
+  if (this->volume_number_ != nullptr)
+    this->volume_number_->publish_state(this->volume_);
+#endif
+}
+
+void Si4703Component::set_mute(bool mute) {
+  this->muted_ = mute;
+  if (this->state_ != State::INIT) {
+    if (mute) {
+      this->registers_[REG_POWERCFG] &= ~PWR_DMUTE;
+    } else {
+      this->registers_[REG_POWERCFG] |= PWR_DMUTE;
+    }
+    this->write_registers_();
+  }
+#ifdef USE_SWITCH
+  if (this->mute_switch_ != nullptr)
+    this->mute_switch_->publish_state(mute);
+#endif
+}
+
+void Si4703Component::set_mono(bool mono) {
+  this->mono_ = mono;
+  if (this->state_ != State::INIT) {
+    if (mono) {
+      this->registers_[REG_POWERCFG] |= PWR_MONO;
+    } else {
+      this->registers_[REG_POWERCFG] &= ~PWR_MONO;
+    }
+    this->write_registers_();
+  }
+#ifdef USE_SWITCH
+  if (this->mono_switch_ != nullptr)
+    this->mono_switch_->publish_state(mono);
+#endif
+}
+
+void Si4703Component::set_seek_threshold(uint8_t threshold) {
+  this->seek_threshold_ = threshold > 127 ? 127 : threshold;
+  if (this->state_ != State::INIT) {
+    this->registers_[REG_SYSCONFIG2] = (this->registers_[REG_SYSCONFIG2] & 0x00FF) | (uint16_t(this->seek_threshold_) << 8);
+    this->write_registers_();
+  }
+#ifdef USE_NUMBER
+  if (this->seek_threshold_number_ != nullptr)
+    this->seek_threshold_number_->publish_state(this->seek_threshold_);
+#endif
+}
+
+// ------------------------------------------------------------------ I2C
 
 bool Si4703Component::read_all_() {
   uint8_t buf[32];
-  if (this->read(buf, sizeof(buf)) != i2c::ERROR_OK) {
-    ESP_LOGW(TAG, "I2C read (32 bytes) failed");
+  if (this->read(buf, sizeof(buf)) != i2c::ERROR_OK)
     return false;
-  }
   // Reads start at 0x0A and wrap: 0x0A..0x0F, then 0x00..0x09
   uint8_t reg = REG_STATUSRSSI;
-  for (int i = 0; i < 32; i += 2) {
-    this->registers_[reg] = (uint16_t(buf[i]) << 8) | buf[i + 1];
+  for (size_t i = 0; i < sizeof(buf); i += 2) {
+    this->registers_[reg] = encode_uint16(buf[i], buf[i + 1]);
     reg = (reg + 1) & 0x0F;
   }
-  this->rssi_ = this->registers_[REG_STATUSRSSI] & 0xFF;
-  this->stereo_ = (this->registers_[REG_STATUSRSSI] & ST_ST) != 0;
   return true;
 }
 
 bool Si4703Component::read_status_() {
-  uint8_t buf[12];
-  if (this->read(buf, sizeof(buf)) != i2c::ERROR_OK) {
-    ESP_LOGV(TAG, "I2C status read failed");
+  uint8_t buf[12];  // 0x0A..0x0F only
+  if (this->read(buf, sizeof(buf)) != i2c::ERROR_OK)
     return false;
-  }
-  for (int i = 0; i < 6; i++) {
-    this->registers_[REG_STATUSRSSI + i] = (uint16_t(buf[2 * i]) << 8) | buf[2 * i + 1];
-  }
-  this->rssi_ = this->registers_[REG_STATUSRSSI] & 0xFF;
-  this->stereo_ = (this->registers_[REG_STATUSRSSI] & ST_ST) != 0;
+  for (uint8_t i = 0; i < 6; i++)
+    this->registers_[REG_STATUSRSSI + i] = encode_uint16(buf[2 * i], buf[2 * i + 1]);
   return true;
 }
 
-bool Si4703Component::write_regs_() {
-  // Writes always start at 0x02 and run upward; we write 0x02..0x07.
+bool Si4703Component::write_registers_() {
+  // Writes always start at 0x02; write 0x02..0x07
   uint8_t buf[12];
-  int idx = 0;
-  for (uint8_t reg = REG_POWERCFG; reg <= REG_TEST1; reg++) {
-    buf[idx++] = this->registers_[reg] >> 8;
-    buf[idx++] = this->registers_[reg] & 0xFF;
+  for (uint8_t i = 0; i < 6; i++) {
+    buf[2 * i] = this->registers_[REG_POWERCFG + i] >> 8;
+    buf[2 * i + 1] = this->registers_[REG_POWERCFG + i] & 0xFF;
   }
   if (this->write(buf, sizeof(buf)) != i2c::ERROR_OK) {
     ESP_LOGW(TAG, "I2C write failed");
@@ -280,234 +523,84 @@ bool Si4703Component::write_regs_() {
   return true;
 }
 
-bool Si4703Component::wait_stc_(bool want_set, uint32_t timeout_ms) {
-  const uint32_t start = millis();
-  while (millis() - start < timeout_ms) {
-    if (this->read_status_()) {
-      bool stc = (this->registers_[REG_STATUSRSSI] & ST_STC) != 0;
-      if (stc == want_set)
-        return true;
-    }
-    delay(5);
-  }
-  return false;
-}
-
-void Si4703Component::refresh_frequency_() {
-  uint16_t chan = this->registers_[REG_READCHAN] & 0x03FF;
-  this->current_frequency_ = BAND_BOTTOM + chan * CHANNEL_STEP;
-  // Round to one decimal to avoid 96.29999
-  this->current_frequency_ = std::round(this->current_frequency_ * 10.0f) / 10.0f;
-  if (this->frequency_sensor_ != nullptr)
-    this->frequency_sensor_->publish_state(this->current_frequency_);
-}
-
-void Si4703Component::log_registers() {
-  if (!this->read_all_()) {
-    ESP_LOGE(TAG, "Register dump: read failed");
-    return;
-  }
-  const uint16_t *r = this->registers_;
-  ESP_LOGI(TAG, "Regs 00-07: %04X %04X %04X %04X %04X %04X %04X %04X", r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7]);
-  ESP_LOGI(TAG, "Regs 08-0F: %04X %04X %04X %04X %04X %04X %04X %04X", r[8], r[9], r[10], r[11], r[12], r[13], r[14],
-           r[15]);
-  ESP_LOGI(TAG, "  POWERCFG=%04X (ENABLE=%d DISABLE=%d DMUTE=%d) TEST1=%04X (XOSCEN=%d)", r[REG_POWERCFG],
-           (r[REG_POWERCFG] & PWR_ENABLE) != 0, (r[REG_POWERCFG] & PWR_DISABLE) != 0,
-           (r[REG_POWERCFG] & PWR_DMUTE) != 0, r[REG_TEST1], (r[REG_TEST1] & 0x8000) != 0);
-  ESP_LOGI(TAG, "  STATUS=%04X RSSI=%u STC=%d SF/BL=%d ST=%d READCHAN=%u", r[REG_STATUSRSSI], r[REG_STATUSRSSI] & 0xFF,
-           (r[REG_STATUSRSSI] & ST_STC) != 0, (r[REG_STATUSRSSI] & ST_SFBL) != 0, (r[REG_STATUSRSSI] & ST_ST) != 0,
-           r[REG_READCHAN] & 0x03FF);
-  ESP_LOGI(TAG, "  RDS groups accepted since tune: %u, station '%s', candidate '%s'", (unsigned) this->rds_groups_,
-           this->last_ps_.c_str(), this->ps_candidate_.c_str());
-}
-
-// ---------------------------------------------------------------- control
-
-void Si4703Component::set_frequency(float mhz) {
-  if (!this->ready_) {
-    this->initial_frequency_ = mhz;  // applied when init completes
-    ESP_LOGD(TAG, "Not ready yet, will tune to %.1f MHz after init", mhz);
-    return;
-  }
-  if (mhz < 87.5f)
-    mhz = 87.5f;
-  if (mhz > 108.0f)
-    mhz = 108.0f;
-  if (this->seeking_) {
-    this->registers_[REG_POWERCFG] &= ~PWR_SEEK;
-    this->write_regs_();
-    this->seeking_ = false;
-  }
-
-  const uint16_t chan = static_cast<uint16_t>(std::lround((mhz - BAND_BOTTOM) / CHANNEL_STEP));
-  ESP_LOGD(TAG, "Tuning to %.1f MHz (channel %u)", mhz, chan);
-
-  this->registers_[REG_CHANNEL] = CHAN_TUNE | (chan & 0x03FF);
-  if (!this->write_regs_())
-    return;
-  if (!this->wait_stc_(true, 300))
-    ESP_LOGW(TAG, "Tune did not complete (STC never set)");
-
-  this->registers_[REG_CHANNEL] &= ~CHAN_TUNE;
-  this->write_regs_();
-  this->wait_stc_(false, 100);
-
-  this->clear_rds_();
-  this->refresh_frequency_();
-  this->report_after_settle_("Tuned to");
-}
-
-void Si4703Component::start_seek_(bool up) {
-  if (!this->ready_ || this->seeking_)
-    return;
-  ESP_LOGD(TAG, "Seeking %s...", up ? "up" : "down");
-  this->registers_[REG_POWERCFG] &= ~(PWR_SKMODE | PWR_SEEKUP);  // wrap at band edge
-  if (up)
-    this->registers_[REG_POWERCFG] |= PWR_SEEKUP;
-  this->registers_[REG_POWERCFG] |= PWR_SEEK;
-  if (!this->write_regs_())
-    return;
-  this->seeking_ = true;
-  this->seek_started_ = millis();
-}
-
-void Si4703Component::finish_seek_() {
-  const bool failed = (this->registers_[REG_STATUSRSSI] & ST_SFBL) != 0;
-  this->registers_[REG_POWERCFG] &= ~PWR_SEEK;
-  this->write_regs_();
-  this->wait_stc_(false, 100);
-  this->seeking_ = false;
-  this->clear_rds_();
-  this->refresh_frequency_();
-  if (failed) {
-    ESP_LOGW(TAG, "Seek found no station (stopped at %.1f MHz)", this->current_frequency_);
-  } else {
-    this->report_after_settle_("Seek found");
-  }
-}
-
-void Si4703Component::set_seek_threshold(uint8_t v) {
-  if (v > 127)
-    v = 127;
-  this->seek_threshold_ = v;
-  if (!this->ready_)
-    return;  // applied during init
-  this->registers_[REG_SYSCONFIG2] = (this->registers_[REG_SYSCONFIG2] & 0x00FF) | (uint16_t(v) << 8);
-  this->write_regs_();
-  ESP_LOGD(TAG, "Seek threshold set to %u dBuV", v);
-}
-
-void Si4703Component::set_volume(uint8_t volume) {
-  if (volume > 15)
-    volume = 15;
-  this->current_volume_ = volume;
-  if (!this->ready_)
-    return;
-  ESP_LOGD(TAG, "Volume %u", volume);
-  this->registers_[REG_SYSCONFIG2] = (this->registers_[REG_SYSCONFIG2] & 0xFFF0) | volume;
-  this->write_regs_();
-}
-
-void Si4703Component::set_mono(bool mono) {
-  this->current_mono_ = mono;
-  if (!this->ready_)
-    return;
-  if (mono)
-    this->registers_[REG_POWERCFG] |= PWR_MONO;
-  else
-    this->registers_[REG_POWERCFG] &= ~PWR_MONO;
-  this->write_regs_();
-}
-
-void Si4703Component::mute() {
-  this->muted_ = true;
-  if (!this->ready_)
-    return;
-  this->registers_[REG_POWERCFG] &= ~PWR_DMUTE;
-  this->write_regs_();
-}
-
-void Si4703Component::unmute() {
-  this->muted_ = false;
-  if (!this->ready_)
-    return;
-  this->registers_[REG_POWERCFG] |= PWR_DMUTE;
-  this->write_regs_();
-}
-
-// ---------------------------------------------------------------- RDS
-
-void Si4703Component::clear_rds_() {
-  memset(this->ps_, 0, sizeof(this->ps_));
-  memset(this->rt_, 0, sizeof(this->rt_));
-  this->ps_seen_ = 0;
-  this->rt_seen_ = 0;
-  this->rt_ab_ = -1;
-  this->last_ps_.clear();
-  this->last_rt_.clear();
-  this->ps_candidate_.clear();
-  this->rt_candidate_.clear();
-  this->rds_groups_ = 0;
-  if (this->station_name_sensor_ != nullptr)
-    this->station_name_sensor_->publish_state("");
-  if (this->radio_text_sensor_ != nullptr)
-    this->radio_text_sensor_->publish_state("");
-}
+// ------------------------------------------------------------------ RDS
 
 static char rds_char(uint8_t c) { return (c >= 0x20 && c < 0x7F) ? static_cast<char>(c) : ' '; }
 
-static std::string trim(const char *s) {
-  std::string out(s);
-  size_t end = out.find_last_not_of(' ');
-  if (end == std::string::npos)
-    return "";
-  out.erase(end + 1);
-  size_t start = out.find_first_not_of(' ');
-  return out.substr(start);
+// Copy src (up to len chars, stops at NUL) into dst trimming surrounding spaces.
+static void trim_copy(const char *src, size_t len, char *dst) {
+  size_t start = 0;
+  size_t end = strnlen(src, len);
+  while (start < end && src[start] == ' ')
+    start++;
+  while (end > start && src[end - 1] == ' ')
+    end--;
+  memcpy(dst, src + start, end - start);
+  dst[end - start] = '\0';
+}
+
+void Si4703Component::clear_rds_() {
+  memset(this->ps_, 0, sizeof(this->ps_));
+  memset(this->ps_candidate_, 0, sizeof(this->ps_candidate_));
+  memset(this->ps_published_, 0, sizeof(this->ps_published_));
+  memset(this->rt_, 0, sizeof(this->rt_));
+  memset(this->rt_candidate_, 0, sizeof(this->rt_candidate_));
+  memset(this->rt_published_, 0, sizeof(this->rt_published_));
+  this->ps_seen_ = 0;
+  this->rt_seen_ = 0;
+  this->rt_ab_ = -1;
+#ifdef USE_TEXT_SENSOR
+  if (this->station_name_text_sensor_ != nullptr)
+    this->station_name_text_sensor_->publish_state("");
+  if (this->radio_text_text_sensor_ != nullptr)
+    this->radio_text_text_sensor_->publish_state("");
+#endif
 }
 
 void Si4703Component::process_rds_() {
   if (!(this->registers_[REG_STATUSRSSI] & ST_RDSR))
     return;
-  // Accept corrected blocks (levels 0-2); drop uncorrectable ones. Because corrected blocks can
-  // occasionally still be wrong, names/texts are only published after being seen twice in a row.
+  // Verbose mode error levels: 0 none, 1 = 1-2 bits corrected, 2 = 3-5 corrected, 3 = uncorrectable.
+  // Corrected blocks are accepted; text is only published after two identical complete reads.
   const uint16_t rc = this->registers_[REG_READCHAN];
   const uint8_t bler_b = (rc >> 14) & 0x03;
   const uint8_t bler_c = (rc >> 12) & 0x03;
   const uint8_t bler_d = (rc >> 10) & 0x03;
   if (bler_b > 1)
-    return;  // block B carries group type/segment - require it to be clean (or 1-2 bits corrected)
-  this->rds_groups_++;
+    return;  // block B carries group type and segment address
 
   const uint16_t b = this->registers_[REG_RDSB];
   const uint16_t c = this->registers_[REG_RDSC];
   const uint16_t d = this->registers_[REG_RDSD];
   const uint8_t group = b >> 12;
   const bool version_b = (b >> 11) & 0x01;
+  char text[65];
 
   if (group == 0) {
-    // Programme Service name: 4 segments x 2 chars, in block D
-    if (bler_d > 2)
+    // Programme Service name: 4 segments x 2 characters in block D
+    if (bler_d >= RDS_UNCORRECTABLE)
       return;
     const uint8_t seg = b & 0x03;
     this->ps_[seg * 2] = rds_char(d >> 8);
     this->ps_[seg * 2 + 1] = rds_char(d & 0xFF);
-    this->ps_seen_ |= (1 << seg);
-    if (this->ps_seen_ == 0x0F) {
-      std::string ps = trim(this->ps_);
-      if (!ps.empty() && ps == this->ps_candidate_ && ps != this->last_ps_) {
-        this->last_ps_ = ps;
-        ESP_LOGI(TAG, "RDS station: '%s'", ps.c_str());
-        if (this->station_name_sensor_ != nullptr)
-          this->station_name_sensor_->publish_state(ps);
-      }
-      this->ps_candidate_ = ps;
-      this->ps_seen_ = 0;
-    }
-  } else if (group == 2) {
-    if (bler_d > 2 || (!version_b && bler_c > 2))
+    this->ps_seen_ |= 1 << seg;
+    if (this->ps_seen_ != 0x0F)
       return;
-    // RadioText
+    this->ps_seen_ = 0;
+    trim_copy(this->ps_, 8, text);
+    if (text[0] != '\0' && strcmp(text, this->ps_candidate_) == 0 && strcmp(text, this->ps_published_) != 0) {
+      strcpy(this->ps_published_, text);
+      ESP_LOGD(TAG, "RDS station: '%s'", text);
+#ifdef USE_TEXT_SENSOR
+      if (this->station_name_text_sensor_ != nullptr)
+        this->station_name_text_sensor_->publish_state(text);
+#endif
+    }
+    strcpy(this->ps_candidate_, text);
+  } else if (group == 2) {
+    // RadioText: 2A = 16 segments x 4 chars (blocks C+D), 2B = 16 x 2 chars (block D)
+    if (bler_d >= RDS_UNCORRECTABLE || (!version_b && bler_c >= RDS_UNCORRECTABLE))
+      return;
     const int8_t ab = (b >> 4) & 0x01;
     if (this->rt_ab_ != -1 && ab != this->rt_ab_) {
       memset(this->rt_, 0, sizeof(this->rt_));
@@ -515,45 +608,36 @@ void Si4703Component::process_rds_() {
     }
     this->rt_ab_ = ab;
     const uint8_t seg = b & 0x0F;
+    const uint8_t chars[4] = {uint8_t(c >> 8), uint8_t(c & 0xFF), uint8_t(d >> 8), uint8_t(d & 0xFF)};
+    const uint8_t first = version_b ? 2 : 0;
+    const uint8_t width = version_b ? 2 : 4;
     bool done = false;
-    if (!version_b) {
-      const uint8_t chars[4] = {uint8_t(c >> 8), uint8_t(c & 0xFF), uint8_t(d >> 8), uint8_t(d & 0xFF)};
-      for (int i = 0; i < 4; i++) {
-        if (chars[i] == 0x0D) {
-          this->rt_[seg * 4 + i] = 0;
-          done = true;
-          break;
-        }
-        this->rt_[seg * 4 + i] = rds_char(chars[i]);
+    for (uint8_t i = 0; i < width; i++) {
+      const uint8_t pos = seg * width + i;
+      const uint8_t ch = chars[first + i];
+      if (ch == 0x0D) {  // end of message
+        this->rt_[pos] = '\0';
+        done = true;
+        break;
       }
-    } else {
-      const uint8_t chars[2] = {uint8_t(d >> 8), uint8_t(d & 0xFF)};
-      for (int i = 0; i < 2; i++) {
-        if (chars[i] == 0x0D) {
-          this->rt_[seg * 2 + i] = 0;
-          done = true;
-          break;
-        }
-        this->rt_[seg * 2 + i] = rds_char(chars[i]);
-      }
+      this->rt_[pos] = rds_char(ch);
     }
-    this->rt_seen_ |= (1 << seg);
-    // Complete when we have every segment up to the terminator, or all 16 segments
+    this->rt_seen_ |= 1 << seg;
     const uint16_t needed = done ? uint16_t((1u << (seg + 1)) - 1) : 0xFFFF;
-    if ((this->rt_seen_ & needed) == needed) {
-      // Stop at first NUL (unfilled positions)
-      std::string rt = trim(std::string(this->rt_, strnlen(this->rt_, 64)).c_str());
-      if (!rt.empty() && rt == this->rt_candidate_ && rt != this->last_rt_) {
-        this->last_rt_ = rt;
-        ESP_LOGI(TAG, "RDS text: '%s'", rt.c_str());
-        if (this->radio_text_sensor_ != nullptr)
-          this->radio_text_sensor_->publish_state(rt);
-      }
-      this->rt_candidate_ = rt;
-      this->rt_seen_ = 0;
+    if ((this->rt_seen_ & needed) != needed)
+      return;
+    this->rt_seen_ = 0;
+    trim_copy(this->rt_, 64, text);
+    if (text[0] != '\0' && strcmp(text, this->rt_candidate_) == 0 && strcmp(text, this->rt_published_) != 0) {
+      strcpy(this->rt_published_, text);
+      ESP_LOGD(TAG, "RDS text: '%s'", text);
+#ifdef USE_TEXT_SENSOR
+      if (this->radio_text_text_sensor_ != nullptr)
+        this->radio_text_text_sensor_->publish_state(text);
+#endif
     }
+    strcpy(this->rt_candidate_, text);
   }
 }
 
-}  // namespace si4703
-}  // namespace esphome
+}  // namespace esphome::si4703
