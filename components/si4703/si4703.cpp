@@ -580,20 +580,23 @@ void Si4703Component::clear_rds_() {
   this->rt_seen_ = 0;
   this->rt_ab_ = -1;
 #ifdef USE_TEXT_SENSOR
-  if (this->radio_text_text_sensor_ != nullptr)
-    this->radio_text_text_sensor_->publish_state("");
   if (!this->status_text_) {
     if (this->station_name_text_sensor_ != nullptr)
       this->station_name_text_sensor_->publish_state("");
+    if (this->radio_text_text_sensor_ != nullptr)
+      this->radio_text_text_sensor_->publish_state("");
     return;
   }
+  // Until RDS arrives, both sensors show the tuned frequency (station name may show a one-off label)
+  char freq[16];
+  snprintf(freq, sizeof(freq), this->get_channel_step() < 0.1f ? "FM %.2f" : "FM %.1f", this->frequency_);
+  if (this->radio_text_text_sensor_ != nullptr)
+    this->radio_text_text_sensor_->publish_state(freq);
   if (this->status_[0] != '\0') {
     this->publish_station_status_(this->status_);
     this->status_[0] = '\0';  // shown once, for this tune
   } else {
-    char buf[16];
-    snprintf(buf, sizeof(buf), this->get_channel_step() < 0.1f ? "%.2f FM" : "%.1f FM", this->frequency_);
-    this->publish_station_status_(buf);
+    this->publish_station_status_(freq);
   }
 #endif
 }

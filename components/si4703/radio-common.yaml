@@ -72,7 +72,7 @@ si4703:
   region: ${region}
   frequency: ${start_frequency}
   volume: 8
-  status_text: true          # show "99.5 FM" / "Preset 3 · 99.5 FM" / "Scanning…" until RDS arrives
+  status_text: true          # show "FM 99.5" / "Preset 3 · FM 99.5" / "Scanning…" until RDS arrives
   on_scan_complete:
     - component.update: scan_results
     - if:
@@ -287,7 +287,7 @@ button:
           float f = id(presets)[*idx];
           ESP_LOGI("preset", "Tuning to preset %u: %.1f MHz", (unsigned) (*idx + 1), f);
           char label[33];
-          snprintf(label, sizeof(label), "Preset %u \u00b7 %.1f FM", (unsigned) (*idx + 1), f);
+          snprintf(label, sizeof(label), "Preset %u \u00b7 FM %.1f", (unsigned) (*idx + 1), f);
           id(radio).set_station_name_status(label);
           id(radio).set_frequency(f);
 
@@ -315,7 +315,7 @@ button:
           auto idx = id(preset_select).active_index();
           if (!idx.has_value()) return;
           char label[33];
-          snprintf(label, sizeof(label), "Preset %u \u00b7 %.1f FM", (unsigned) (*idx + 1), id(presets)[*idx]);
+          snprintf(label, sizeof(label), "Preset %u \u00b7 FM %.1f", (unsigned) (*idx + 1), id(presets)[*idx]);
           id(radio).set_station_name_status(label);
           id(radio).set_frequency(id(presets)[*idx]);
 
@@ -330,7 +330,7 @@ button:
           auto idx = id(preset_select).active_index();
           if (!idx.has_value()) return;
           char label[33];
-          snprintf(label, sizeof(label), "Preset %u \u00b7 %.1f FM", (unsigned) (*idx + 1), id(presets)[*idx]);
+          snprintf(label, sizeof(label), "Preset %u \u00b7 FM %.1f", (unsigned) (*idx + 1), id(presets)[*idx]);
           id(radio).set_station_name_status(label);
           id(radio).set_frequency(id(presets)[*idx]);
 

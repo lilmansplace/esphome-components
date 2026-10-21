@@ -116,7 +116,7 @@ class Si4703Component : public Component, public i2c::I2CDevice {
   // Band scan: seeks through the whole band and records every station found (frequency + RSSI).
   // Results are sorted strongest first; the previous frequency is restored when the scan ends.
   void start_scan();
-  /// Text shown as the station name for the next tune or scan (e.g. "Preset 3 · 99.5 FM"), until RDS
+  /// Text shown as the station name for the next tune or scan (e.g. "Preset 3 · FM 99.5"), until RDS
   /// data replaces it. Requires status_text.
   void set_station_name_status(const char *text);
   bool is_scanning() const { return this->scanning_; }
