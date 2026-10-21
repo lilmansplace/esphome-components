@@ -171,6 +171,8 @@ class Si4703Component : public Component, public i2c::I2CDevice {
   uint16_t registers_[16]{};
 
   State state_{State::INIT};
+  uint16_t chip_id_{0};
+  uint16_t test1_reset_{0};
   uint32_t last_poll_{0};
   uint32_t op_started_{0};
   uint32_t last_rssi_publish_{0};

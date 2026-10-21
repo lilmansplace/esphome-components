@@ -48,8 +48,9 @@ static constexpr uint16_t SC1_DE = 1 << 11;
 static constexpr uint16_t SC2_VOLUME_MASK = 0x000F;
 // SYSCONFIG3 (0x06): SKSNR[7:4] = 4, SKCNT[3:0] = 8 (AN230 recommended seek settings)
 static constexpr uint16_t SC3_SEEK_DEFAULTS = 0x0048;
-// TEST1 (0x07): XOSCEN, AN230 crystal start value
-static constexpr uint16_t TEST1_XOSCEN = 0x8100;
+// TEST1 (0x07): bit 15 XOSCEN, bit 14 AHIZEN, bits 13:0 reserved (must be written back as read)
+static constexpr uint16_t TEST1_XOSCEN = 0x8000;
+static constexpr uint16_t TEST1_AHIZEN = 0x4000;
 // STATUSRSSI (0x0A)
 static constexpr uint16_t ST_RDSR = 1 << 15;
 static constexpr uint16_t ST_STC = 1 << 14;
@@ -141,8 +142,13 @@ void Si4703Component::init_verify_() {
     this->set_timeout(1000, [this]() { this->init_verify_(); });
     return;
   }
-  // Start the 32.768 kHz crystal oscillator
-  this->registers_[REG_TEST1] = TEST1_XOSCEN;
+  this->chip_id_ = this->registers_[REG_CHIPID];
+  this->test1_reset_ = this->registers_[REG_TEST1];
+  // Start the 32.768 kHz crystal oscillator. Read-modify-write: the reserved TEST1 bits differ between
+  // silicon revisions and must keep the value the chip reports.
+  this->registers_[REG_TEST1] = (this->test1_reset_ & ~TEST1_AHIZEN) | TEST1_XOSCEN;
+  ESP_LOGD(TAG, "CHIPID 0x%04X, TEST1 0x%04X -> 0x%04X", this->chip_id_, this->test1_reset_,
+           this->registers_[REG_TEST1]);
   if (!this->write_registers_()) {
     this->mark_failed(LOG_STR("Failed to enable oscillator"));
     return;
@@ -199,6 +205,10 @@ void Si4703Component::dump_config() {
                 band_to_str(this->band_), this->get_channel_step() * 1000.0f, this->de_50us_ ? "50 us" : "75 us",
                 this->target_frequency_, this->volume_);
   LOG_I2C_DEVICE(this);
+  if (this->chip_id_ != 0) {
+    ESP_LOGCONFIG(TAG, "  CHIPID: 0x%04X (firmware %u), TEST1 at reset: 0x%04X", this->chip_id_,
+                  this->chip_id_ & 0x3F, this->test1_reset_);
+  }
   LOG_PIN("  Reset Pin: ", this->reset_pin_);
   LOG_PIN("  SDIO Pin: ", this->sdio_pin_);
   if (this->sdio_pin_ == nullptr) {
