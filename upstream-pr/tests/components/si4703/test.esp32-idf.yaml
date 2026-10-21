@@ -1,0 +1,7 @@
+substitutions:
+  reset_pin: GPIO18
+  sdio_pin: GPIO19
+
+packages:
+  i2c: !include ../../test_build_components/common/i2c/esp32-idf.yaml
+  si4703: !include common.yaml
