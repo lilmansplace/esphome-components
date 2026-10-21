@@ -72,6 +72,7 @@ si4703:
   region: ${region}
   frequency: ${start_frequency}
   volume: 8
+  status_text: true          # show "99.5 FM" / "Preset 3 · 99.5 FM" / "Scanning…" until RDS arrives
   on_scan_complete:
     - component.update: scan_results
     - if:
@@ -96,6 +97,9 @@ script:
             id(autoprog_threshold) = std::max(0, id(autoprog_threshold) - 4);
             ESP_LOGI("autoprog", "Found %u station(s); rescanning at seek threshold %d", n, id(autoprog_threshold));
             id(radio).set_seek_threshold(id(autoprog_threshold));
+            char label[33];
+            snprintf(label, sizeof(label), "Auto-programming \u00b7 %d dB\u00b5V", id(autoprog_threshold));
+            id(radio).set_station_name_status(label);
             id(radio).start_scan();
             return;
           }
@@ -269,6 +273,7 @@ button:
                 id(autoprog_saved_threshold) = id(radio).get_seek_threshold();
                 id(autoprog_threshold) = id(autoprog_saved_threshold);
                 ESP_LOGI("autoprog", "Auto-programming presets (seek threshold %d)", id(autoprog_threshold));
+                id(radio).set_station_name_status("Auto-programming\u2026");
                 id(radio).start_scan();
             - script.execute: autoprog_watchdog
 
@@ -281,6 +286,9 @@ button:
           if (!idx.has_value()) return;
           float f = id(presets)[*idx];
           ESP_LOGI("preset", "Tuning to preset %u: %.1f MHz", (unsigned) (*idx + 1), f);
+          char label[33];
+          snprintf(label, sizeof(label), "Preset %u \u00b7 %.1f FM", (unsigned) (*idx + 1), f);
+          id(radio).set_station_name_status(label);
           id(radio).set_frequency(f);
 
   - platform: template
@@ -305,7 +313,11 @@ button:
           cycle: true
       - lambda: |-
           auto idx = id(preset_select).active_index();
-          if (idx.has_value()) id(radio).set_frequency(id(presets)[*idx]);
+          if (!idx.has_value()) return;
+          char label[33];
+          snprintf(label, sizeof(label), "Preset %u \u00b7 %.1f FM", (unsigned) (*idx + 1), id(presets)[*idx]);
+          id(radio).set_station_name_status(label);
+          id(radio).set_frequency(id(presets)[*idx]);
 
   - platform: template
     name: "Previous Preset"
@@ -316,7 +328,11 @@ button:
           cycle: true
       - lambda: |-
           auto idx = id(preset_select).active_index();
-          if (idx.has_value()) id(radio).set_frequency(id(presets)[*idx]);
+          if (!idx.has_value()) return;
+          char label[33];
+          snprintf(label, sizeof(label), "Preset %u \u00b7 %.1f FM", (unsigned) (*idx + 1), id(presets)[*idx]);
+          id(radio).set_station_name_status(label);
+          id(radio).set_frequency(id(presets)[*idx]);
 
   - platform: restart
     name: "Restart"

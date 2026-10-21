@@ -101,6 +101,8 @@ class Si4703Component : public Component, public i2c::I2CDevice {
   void set_de_emphasis_50us(bool de_50us) { this->de_50us_ = de_50us; }
   void set_initial_frequency(float mhz) { this->target_frequency_ = mhz; }
   void set_initial_volume(uint8_t volume) { this->volume_ = volume > 15 ? 15 : volume; }
+  /// Show the frequency / scan status in the station name and radio text sensors until RDS data arrives
+  void set_status_text(bool enable) { this->status_text_ = enable; }
 
   // Control. All calls are non-blocking; tune/seek complete over the next loop iterations.
   void set_frequency(float mhz);
@@ -114,6 +116,9 @@ class Si4703Component : public Component, public i2c::I2CDevice {
   // Band scan: seeks through the whole band and records every station found (frequency + RSSI).
   // Results are sorted strongest first; the previous frequency is restored when the scan ends.
   void start_scan();
+  /// Text shown as the station name for the next tune or scan (e.g. "Preset 3 · 99.5 FM"), until RDS
+  /// data replaces it. Requires status_text.
+  void set_station_name_status(const char *text);
   bool is_scanning() const { return this->scanning_; }
   /// True while initialising, tuning, seeking or scanning (new commands would be ignored)
   bool is_busy() const { return this->state_ != State::IDLE || this->scanning_; }
@@ -173,6 +178,9 @@ class Si4703Component : public Component, public i2c::I2CDevice {
   uint16_t registers_[16]{};
 
   State state_{State::INIT};
+  void publish_station_status_(const char *text);
+  bool status_text_{false};
+  char status_[33]{};
   uint16_t chip_id_{0};
   uint16_t test1_reset_{0};
   uint32_t last_poll_{0};

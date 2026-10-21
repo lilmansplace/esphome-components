@@ -26,6 +26,7 @@ CONF_CHANNEL_SPACING = "channel_spacing"
 CONF_DE_EMPHASIS = "de_emphasis"
 CONF_REGION = "region"
 CONF_ON_SCAN_COMPLETE = "on_scan_complete"
+CONF_STATUS_TEXT = "status_text"
 
 si4703_ns = cg.esphome_ns.namespace("si4703")
 Si4703Component = si4703_ns.class_("Si4703Component", cg.Component, i2c.I2CDevice)
@@ -125,6 +126,8 @@ CONFIG_SCHEMA = cv.All(
                 min=76.0, max=108.0
             ),
             cv.Optional(CONF_VOLUME, default=8): cv.int_range(min=0, max=15),
+            # Show the frequency / scan progress in station_name and radio_text until RDS data arrives
+            cv.Optional(CONF_STATUS_TEXT, default=False): cv.boolean,
         }
     )
     .extend(cv.COMPONENT_SCHEMA)
@@ -149,6 +152,8 @@ async def to_code(config: ConfigType) -> None:
     cg.add(var.set_de_emphasis_50us(config[CONF_DE_EMPHASIS]))
     cg.add(var.set_initial_frequency(config[CONF_FREQUENCY]))
     cg.add(var.set_initial_volume(config[CONF_VOLUME]))
+    if config[CONF_STATUS_TEXT]:
+        cg.add(var.set_status_text(True))
 
     for conf in config.get(CONF_ON_SCAN_COMPLETE, []):
         trigger = cg.new_Pvariable(conf[CONF_TRIGGER_ID], var)
