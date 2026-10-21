@@ -2,7 +2,8 @@
 # Include from a board file that defines these substitutions:
 #   sdio_pin, sclk_pin, reset_pin, start_frequency
 # Optional: region (americas | europe | australia | japan | japan_wide), default americas.
-# Provides: tuning, volume, mute/mono, seek, RDS station name + text, signal strength,
+# Provides: tuning, volume, mute/mono, seek, RDS station name + text (showing the frequency, preset or
+# scan progress until RDS arrives), signal strength,
 # 6 presets (drop-down + Tune/Store/Next/Previous), "Auto-program Presets" (adaptive band scan,
 # strongest 6 stations), "Scan Band" (scan only), and restores last station/volume/seek threshold.
 
@@ -48,6 +49,11 @@ globals:
     type: int
     restore_value: true
     initial_value: '8'
+  # One-off station name label for the next tune (e.g. "Preset 3 · FM 99.5"), consumed by the
+  # Tuned Frequency sensor below
+  - id: station_label
+    type: std::string
+    initial_value: '""'
   # Auto-program state (not persisted)
   - id: autoprog_active
     type: bool
@@ -72,7 +78,6 @@ si4703:
   region: ${region}
   frequency: ${start_frequency}
   volume: 8
-  status_text: true          # show "FM 99.5" / "Preset 3 · FM 99.5" / "Scanning…" until RDS arrives
   on_scan_complete:
     - component.update: scan_results
     - if:
@@ -99,7 +104,8 @@ script:
             id(radio).set_seek_threshold(id(autoprog_threshold));
             char label[33];
             snprintf(label, sizeof(label), "Auto-programming \u00b7 %d dB\u00b5V", id(autoprog_threshold));
-            id(radio).set_station_name_status(label);
+            id(station_name_display).publish_state(label);
+            id(radio_text_display).publish_state("Scanning\u2026");
             id(radio).start_scan();
             return;
           }
@@ -144,16 +150,46 @@ sensor:
     frequency:
       name: "Tuned Frequency"
       on_value:
-        - lambda: 'id(last_frequency) = x;'
+        # Every completed tune: remember it, and show the frequency (or a one-off label such as
+        # "Preset 3 · FM 99.5") in Station Name / Radio Text until RDS data replaces it
+        - lambda: |-
+            id(last_frequency) = x;
+            char freq[16];
+            snprintf(freq, sizeof(freq), "FM %.1f", x);
+            id(radio_text_display).publish_state(freq);
+            if (!id(station_label).empty()) {
+              id(station_name_display).publish_state(id(station_label));
+              id(station_label).clear();
+            } else {
+              id(station_name_display).publish_state(freq);
+            }
     rssi:
       name: "Signal Strength"
 
 text_sensor:
+  # Raw RDS from the tuner (blank until data arrives); passed through to the display sensors below
   - platform: si4703
     station_name:
-      name: "Station Name"
+      id: rds_station_name
+      internal: true
+      on_value:
+        - lambda: 'if (!x.empty()) id(station_name_display).publish_state(x);'
     radio_text:
-      name: "Radio Text"
+      id: rds_radio_text
+      internal: true
+      on_value:
+        - lambda: 'if (!x.empty()) id(radio_text_display).publish_state(x);'
+
+  # What Home Assistant sees: RDS when available, otherwise frequency / preset / scan status
+  - platform: template
+    name: "Station Name"
+    id: station_name_display
+    icon: mdi:radio-tower
+
+  - platform: template
+    name: "Radio Text"
+    id: radio_text_display
+    icon: mdi:message-text
 
   - platform: template
     name: "Preset Frequency"
@@ -254,6 +290,11 @@ button:
       name: "Seek Down"
     scan:
       name: "Scan Band"
+      on_press:
+        - lambda: |-
+            if (id(radio).is_busy()) return;
+            id(station_name_display).publish_state("Scanning\u2026");
+            id(radio_text_display).publish_state("Scanning\u2026");
 
   - platform: template
     name: "Auto-program Presets"
@@ -273,7 +314,8 @@ button:
                 id(autoprog_saved_threshold) = id(radio).get_seek_threshold();
                 id(autoprog_threshold) = id(autoprog_saved_threshold);
                 ESP_LOGI("autoprog", "Auto-programming presets (seek threshold %d)", id(autoprog_threshold));
-                id(radio).set_station_name_status("Auto-programming\u2026");
+                id(station_name_display).publish_state("Auto-programming\u2026");
+                id(radio_text_display).publish_state("Scanning\u2026");
                 id(radio).start_scan();
             - script.execute: autoprog_watchdog
 
@@ -288,7 +330,7 @@ button:
           ESP_LOGI("preset", "Tuning to preset %u: %.1f MHz", (unsigned) (*idx + 1), f);
           char label[33];
           snprintf(label, sizeof(label), "Preset %u \u00b7 FM %.1f", (unsigned) (*idx + 1), f);
-          id(radio).set_station_name_status(label);
+          id(station_label) = label;
           id(radio).set_frequency(f);
 
   - platform: template
@@ -316,7 +358,7 @@ button:
           if (!idx.has_value()) return;
           char label[33];
           snprintf(label, sizeof(label), "Preset %u \u00b7 FM %.1f", (unsigned) (*idx + 1), id(presets)[*idx]);
-          id(radio).set_station_name_status(label);
+          id(station_label) = label;
           id(radio).set_frequency(id(presets)[*idx]);
 
   - platform: template
@@ -331,8 +373,26 @@ button:
           if (!idx.has_value()) return;
           char label[33];
           snprintf(label, sizeof(label), "Preset %u \u00b7 FM %.1f", (unsigned) (*idx + 1), id(presets)[*idx]);
-          id(radio).set_station_name_status(label);
+          id(station_label) = label;
           id(radio).set_frequency(id(presets)[*idx]);
 
   - platform: restart
     name: "Restart"
+
+# Scan progress in Radio Text ("Found 7 · 98.7 MHz") while a scan runs
+interval:
+  - interval: 250ms
+    then:
+      - lambda: |-
+          static uint8_t shown = 0;
+          if (!id(radio).is_scanning()) {
+            shown = 0;
+            return;
+          }
+          const uint8_t n = id(radio).get_scan_count();
+          if (n == shown || n == 0)
+            return;
+          shown = n;
+          char buf[32];
+          snprintf(buf, sizeof(buf), "Found %u \u00b7 %.1f MHz", n, id(radio).get_scan_frequency(n - 1));
+          id(radio_text_display).publish_state(buf);

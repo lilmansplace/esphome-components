@@ -408,14 +408,6 @@ void Si4703Component::start_scan() {
   ESP_LOGI(TAG, "Scanning %s (seek threshold %u dBuV)", LOG_STR_ARG(band_to_str(this->band_)), this->seek_threshold_);
   this->scanning_ = true;
   this->scan_count_ = 0;
-  if (this->status_text_) {
-    this->publish_station_status_(this->status_[0] != '\0' ? this->status_ : "Scanning\u2026");
-    this->status_[0] = '\0';
-#ifdef USE_TEXT_SENSOR
-    if (this->radio_text_text_sensor_ != nullptr)
-      this->radio_text_text_sensor_->publish_state("Scanning\u2026");
-#endif
-  }
   this->scan_return_frequency_ = this->frequency_;
   this->tune_(this->get_band_min());  // start at the bottom, then seek upward to the top
 }
@@ -434,13 +426,6 @@ void Si4703Component::scan_step_() {
     }
     this->scan_results_[this->scan_count_++] = {mhz, this->stc_rssi_};
     ESP_LOGD(TAG, "Scan found %.2f MHz, RSSI %u dBuV", mhz, this->stc_rssi_);
-#ifdef USE_TEXT_SENSOR
-    if (this->status_text_ && this->radio_text_text_sensor_ != nullptr) {
-      char buf[32];
-      snprintf(buf, sizeof(buf), "Found %u \u00b7 %.1f MHz", this->scan_count_, mhz);
-      this->radio_text_text_sensor_->publish_state(buf);
-    }
-#endif
     if (this->scan_count_ >= MAX_SCAN_RESULTS) {
       this->finish_scan_();
       return;
@@ -590,40 +575,11 @@ void Si4703Component::clear_rds_() {
   this->rt_seen_ = 0;
   this->rt_ab_ = -1;
 #ifdef USE_TEXT_SENSOR
-  if (!this->status_text_) {
-    if (this->station_name_text_sensor_ != nullptr)
-      this->station_name_text_sensor_->publish_state("");
-    if (this->radio_text_text_sensor_ != nullptr)
-      this->radio_text_text_sensor_->publish_state("");
-    return;
-  }
-  // Until RDS arrives, both sensors show the tuned frequency (station name may show a one-off label)
-  char freq[16];
-  snprintf(freq, sizeof(freq), this->get_channel_step() < 0.1f ? "FM %.2f" : "FM %.1f", this->frequency_);
-  if (this->radio_text_text_sensor_ != nullptr)
-    this->radio_text_text_sensor_->publish_state(freq);
-  if (this->status_[0] != '\0') {
-    this->publish_station_status_(this->status_);
-    this->status_[0] = '\0';  // shown once, for this tune
-  } else {
-    this->publish_station_status_(freq);
-  }
-#endif
-}
-
-void Si4703Component::publish_station_status_(const char *text) {
-#ifdef USE_TEXT_SENSOR
   if (this->station_name_text_sensor_ != nullptr)
-    this->station_name_text_sensor_->publish_state(text);
+    this->station_name_text_sensor_->publish_state("");
+  if (this->radio_text_text_sensor_ != nullptr)
+    this->radio_text_text_sensor_->publish_state("");
 #endif
-}
-
-void Si4703Component::set_station_name_status(const char *text) {
-  if (!this->status_text_)
-    return;
-  strncpy(this->status_, text, sizeof(this->status_) - 1);
-  this->status_[sizeof(this->status_) - 1] = '\0';
-  this->publish_station_status_(this->status_);
 }
 
 void Si4703Component::process_rds_() {

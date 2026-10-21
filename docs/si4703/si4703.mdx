@@ -70,9 +70,6 @@ Wire **SEN** to 3.3 V, or leave it unconnected only if the board already pulls i
 - **frequency** (*Optional*, float): The frequency in MHz to tune to at startup. Must be within the configured band.
   Defaults to `87.5`.
 - **volume** (*Optional*, int): The startup volume, from `0` to `15`. Defaults to `8`.
-- **status_text** (*Optional*, boolean): When enabled, the `station_name` and `radio_text` text sensors show the
-  tuned frequency (for example `FM 99.5`) until RDS data replaces it, `Scanning…` while a band scan runs, and the
-  scan progress in `radio_text`. Defaults to `false`.
 - **on_scan_complete** (*Optional*, [Automation](/automations/)): An automation to run when a band scan finishes.
   See [`on_scan_complete` Trigger](#on_scan_complete-trigger).
 - **address** (*Optional*, int): The I²C address of the tuner. Defaults to `0x10`.
@@ -130,7 +127,8 @@ text_sensor:
 - **si4703_id** (*Optional*, [ID](/guides/configuration-types#id)): The ID of the `si4703` component.
 
 Text is published only after the same complete message has been received twice, which filters out decoding errors.
-The values are cleared when the tuner changes frequency, unless `status_text` is enabled.
+The values are cleared when the tuner changes frequency. To show the frequency instead while no RDS data is
+available, see [Show the Frequency Until RDS Arrives](#show-the-frequency-until-rds-arrives).
 
 ## Number
 
@@ -263,9 +261,55 @@ From [lambdas](/automations/templates/#config-lambda), you can call these method
 - `get_frequency()`, `get_volume()`, `get_seek_threshold()`, `get_rssi()`, `is_stereo()`, `is_muted()`, `is_mono()`
 - `is_busy()`: `true` while the tuner is starting up, tuning, seeking or scanning. Seeks and scans requested while
   busy are ignored.
-- `set_station_name_status(const char *text)`: With `status_text` enabled, shows `text` as the station name for the
-  next tune or scan until RDS data replaces it, for example `id(radio).set_station_name_status("Preset 3");` before
-  `id(radio).set_frequency(99.5);`.
+- `is_scanning()`, `get_scan_count()`, `get_scan_frequency(uint8_t index)`, `get_scan_rssi(uint8_t index)`: The
+  scan state and results. During a scan, results are in the order found; once complete, strongest first.
+
+## Examples
+
+### Show the Frequency Until RDS Arrives
+
+Many stations do not broadcast RDS. This keeps the RDS text sensors internal and shows `FM 99.5` in a template
+text sensor until a station name arrives:
+
+```yaml
+sensor:
+  - platform: si4703
+    frequency:
+      name: "Tuned Frequency"
+      on_value:
+        - lambda: |-
+            char freq[16];
+            snprintf(freq, sizeof(freq), "FM %.1f", x);
+            id(station_name_display).publish_state(freq);
+
+text_sensor:
+  - platform: si4703
+    station_name:
+      internal: true
+      on_value:
+        - lambda: 'if (!x.empty()) id(station_name_display).publish_state(x);'
+  - platform: template
+    name: "Station Name"
+    id: station_name_display
+```
+
+### Store the Strongest Stations as Presets
+
+```yaml
+globals:
+  - id: presets
+    type: std::array<float, 6>
+    restore_value: true
+
+si4703:
+  id: radio
+  # ...
+  on_scan_complete:
+    - lambda: |-
+        const uint8_t k = std::min<uint8_t>(id(radio).get_scan_count(), 6);
+        for (uint8_t i = 0; i < k; i++)
+          id(presets)[i] = id(radio).get_scan_frequency(i);
+```
 
 ## Troubleshooting
 

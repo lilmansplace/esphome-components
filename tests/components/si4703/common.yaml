@@ -13,7 +13,6 @@ si4703:
     allow_other_uses: true
   region: europe
   frequency: 98.5
-  status_text: true
   volume: 8
   on_scan_complete:
     - logger.log:
