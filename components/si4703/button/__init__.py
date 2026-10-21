@@ -1,6 +1,7 @@
 import esphome.codegen as cg
 from esphome.components import button
 import esphome.config_validation as cv
+from esphome.const import CONF_SCAN
 from esphome.types import ConfigType
 
 from .. import CONF_SI4703_ID, Si4703Component, si4703_ns
@@ -11,7 +12,6 @@ ScanButton = si4703_ns.class_("ScanButton", button.Button)
 
 CONF_SEEK_UP = "seek_up"
 CONF_SEEK_DOWN = "seek_down"
-CONF_SCAN = "scan"
 
 CONFIG_SCHEMA = cv.Schema(
     {
@@ -22,9 +22,7 @@ CONFIG_SCHEMA = cv.Schema(
         cv.Optional(CONF_SEEK_DOWN): button.button_schema(
             SeekDownButton, icon="mdi:rewind"
         ),
-        cv.Optional(CONF_SCAN): button.button_schema(
-            ScanButton, icon="mdi:radar"
-        ),
+        cv.Optional(CONF_SCAN): button.button_schema(ScanButton, icon="mdi:radar"),
     }
 )
 

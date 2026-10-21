@@ -1,0 +1,284 @@
+---
+title: "Si4703 FM Tuner"
+description: "Instructions for setting up Si4702/Si4703 FM radio tuners with RDS in ESPHome."
+---
+
+import APIRef from '@components/APIRef.astro';
+
+The `si4703` component allows you to use Silicon Labs Si4702 and Si4703 FM radio receivers with ESPHome. The chip
+tunes 76–108 MHz, decodes RDS/RBDS station names and RadioText (Si4703 only), reports signal strength, and drives
+a stereo headphone output. It is commonly sold on breakout boards such as the SparkFun FM Tuner Evaluation Board
+(WRL-12938), where the headphone cord acts as the antenna.
+
+The [I²C Bus](/components/i2c/) is required to be set up in your configuration for this component to work.
+
+```yaml
+# Example configuration entry
+si4703:
+  reset_pin: GPIOXX
+  sdio_pin:
+    number: GPIOXX  # same GPIO as the I²C SDA pin
+    allow_other_uses: true
+```
+
+## Bus Mode Selection
+
+The Si4703 chooses between its 2-wire (I²C) and 3-wire interfaces on the rising edge of its reset pin. 2-wire mode
+requires **SEN** to be high and **SDIO** to be low at that moment. Most breakout boards pull SDIO high, so the
+component drives the SDIO line low while it resets the chip. To allow this, set `sdio_pin` to the same GPIO as the
+I²C bus `sda` pin, and add `allow_other_uses: true` to both:
+
+```yaml
+i2c:
+  sda:
+    number: GPIOXX
+    allow_other_uses: true
+  scl: GPIOXX
+
+si4703:
+  reset_pin: GPIOXX
+  sdio_pin:
+    number: GPIOXX
+    allow_other_uses: true
+```
+
+Wire **SEN** to 3.3 V, or leave it unconnected only if the board already pulls it high (the SparkFun board does).
+
+> [!NOTE]
+> The bus mode is only selected during reset. If the tuner is connected after the microcontroller has booted,
+> restart the device.
+
+## Configuration Variables
+
+- **reset_pin** (**Required**, [Pin](/guides/configuration-types#pin)): The pin connected to the tuner's RST pin.
+- **sdio_pin** (*Optional*, [Pin](/guides/configuration-types#pin)): The I²C SDA pin, driven low during reset to
+  select 2-wire mode. Required on boards that pull SDIO high. See [Bus Mode Selection](#bus-mode-selection).
+- **region** (*Optional*, enum): Sets `band`, `channel_spacing` and `de_emphasis` to the values used in a region.
+  Any of the three can still be set explicitly to override it. Defaults to `americas`.
+
+  | Region       | Band          | Channel spacing | De-emphasis |
+  | ------------ | ------------- | --------------- | ----------- |
+  | `americas`   | 87.5–108 MHz  | 200 kHz         | 75 µs       |
+  | `europe`     | 87.5–108 MHz  | 100 kHz         | 50 µs       |
+  | `australia`  | 87.5–108 MHz  | 200 kHz         | 50 µs       |
+  | `japan`      | 76–90 MHz     | 100 kHz         | 50 µs       |
+  | `japan_wide` | 76–108 MHz    | 100 kHz         | 50 µs       |
+
+- **band** (*Optional*, enum): The tuning band. One of `87.5-108MHz`, `76-108MHz` or `76-90MHz`.
+- **channel_spacing** (*Optional*, enum): The tuning step. One of `200kHz`, `100kHz` or `50kHz`.
+- **de_emphasis** (*Optional*, enum): The audio de-emphasis time constant. One of `75us` or `50us`.
+- **frequency** (*Optional*, float): The frequency in MHz to tune to at startup. Must be within the configured band.
+  Defaults to `87.5`.
+- **volume** (*Optional*, int): The startup volume, from `0` to `15`. Defaults to `8`.
+- **status_text** (*Optional*, boolean): When enabled, the `station_name` and `radio_text` text sensors show the
+  tuned frequency (for example `FM 99.5`) until RDS data replaces it, `Scanning…` while a band scan runs, and the
+  scan progress in `radio_text`. Defaults to `false`.
+- **on_scan_complete** (*Optional*, [Automation](/automations/)): An automation to run when a band scan finishes.
+  See [`on_scan_complete` Trigger](#on_scan_complete-trigger).
+- **address** (*Optional*, int): The I²C address of the tuner. Defaults to `0x10`.
+- **i2c_id** (*Optional*, [ID](/guides/configuration-types#id)): The ID of the [I²C Bus](/components/i2c/) if you
+  are using multiple buses.
+- **id** (*Optional*, [ID](/guides/configuration-types#id)): Manually specify the ID used for code generation and in
+  the platforms and actions below.
+
+## Sensor
+
+```yaml
+sensor:
+  - platform: si4703
+    frequency:
+      name: "Tuned Frequency"
+    rssi:
+      name: "Signal Strength"
+```
+
+- **frequency** (*Optional*): The frequency the tuner is tuned to, in MHz.
+  All options from [Sensor](/components/sensor/).
+- **rssi** (*Optional*): The received signal strength, in dBµV.
+  All options from [Sensor](/components/sensor/).
+- **si4703_id** (*Optional*, [ID](/guides/configuration-types#id)): The ID of the `si4703` component if you are
+  using more than one.
+
+## Binary Sensor
+
+```yaml
+binary_sensor:
+  - platform: si4703
+    stereo:
+      name: "Stereo"
+```
+
+- **stereo** (*Optional*): On when the tuner is receiving a stereo signal.
+  All options from [Binary Sensor](/components/binary_sensor/).
+- **si4703_id** (*Optional*, [ID](/guides/configuration-types#id)): The ID of the `si4703` component.
+
+## Text Sensor
+
+```yaml
+text_sensor:
+  - platform: si4703
+    station_name:
+      name: "Station Name"
+    radio_text:
+      name: "Radio Text"
+```
+
+- **station_name** (*Optional*): The RDS Program Service name (up to 8 characters). Many stations change it every few
+  seconds to scroll longer messages. All options from [Text Sensor](/components/text_sensor/).
+- **radio_text** (*Optional*): The RDS RadioText message (up to 64 characters).
+  All options from [Text Sensor](/components/text_sensor/).
+- **si4703_id** (*Optional*, [ID](/guides/configuration-types#id)): The ID of the `si4703` component.
+
+Text is published only after the same complete message has been received twice, which filters out decoding errors.
+The values are cleared when the tuner changes frequency, unless `status_text` is enabled.
+
+## Number
+
+```yaml
+number:
+  - platform: si4703
+    frequency:
+      name: "Frequency"
+    volume:
+      name: "Volume"
+    seek_threshold:
+      name: "Seek Threshold"
+```
+
+- **frequency** (*Optional*): Tunes to the entered frequency. The range and step follow the configured band and
+  channel spacing. All options from [Number](/components/number/).
+- **volume** (*Optional*): The volume, from `0` to `15`. All options from [Number](/components/number/).
+- **seek_threshold** (*Optional*): The minimum signal strength (dBµV, `0`–`127`) at which a seek or scan stops on
+  a station. Lower values find weaker stations. All options from [Number](/components/number/).
+- **si4703_id** (*Optional*, [ID](/guides/configuration-types#id)): The ID of the `si4703` component.
+
+## Switch
+
+```yaml
+switch:
+  - platform: si4703
+    mute:
+      name: "Mute"
+    mono:
+      name: "Force Mono"
+```
+
+- **mute** (*Optional*): Mutes the audio output. All options from [Switch](/components/switch/).
+- **mono** (*Optional*): Forces mono reception, which can reduce noise on weak stations.
+  All options from [Switch](/components/switch/).
+- **si4703_id** (*Optional*, [ID](/guides/configuration-types#id)): The ID of the `si4703` component.
+
+## Button
+
+```yaml
+button:
+  - platform: si4703
+    seek_up:
+      name: "Seek Up"
+    seek_down:
+      name: "Seek Down"
+    scan:
+      name: "Scan Band"
+```
+
+- **seek_up** (*Optional*): Seeks to the next station above the current frequency, wrapping at the band edge.
+  All options from [Button](/components/button/).
+- **seek_down** (*Optional*): Seeks to the next station below the current frequency, wrapping at the band edge.
+  All options from [Button](/components/button/).
+- **scan** (*Optional*): Starts a band scan. See [`si4703.scan` Action](#si4703scan-action).
+  All options from [Button](/components/button/).
+- **si4703_id** (*Optional*, [ID](/guides/configuration-types#id)): The ID of the `si4703` component.
+
+## Actions
+
+### `si4703.tune` Action
+
+Tunes to a frequency. Values outside the configured band are clamped to it.
+
+```yaml
+on_...:
+  - si4703.tune:
+      frequency: 99.5
+```
+
+- **frequency** (**Required**, float, [templatable](/automations/templates/)): The frequency in MHz.
+- **id** (*Optional*, [ID](/guides/configuration-types#id)): The ID of the `si4703` component.
+
+### `si4703.seek_up` / `si4703.seek_down` Actions
+
+Seeks to the next station above or below the current frequency.
+
+```yaml
+on_...:
+  - si4703.seek_up:
+  - si4703.seek_down:
+```
+
+- **id** (*Optional*, [ID](/guides/configuration-types#id)): The ID of the `si4703` component.
+
+### `si4703.set_volume` Action
+
+```yaml
+on_...:
+  - si4703.set_volume:
+      volume: 10
+```
+
+- **volume** (**Required**, int, [templatable](/automations/templates/)): The volume, from `0` to `15`.
+- **id** (*Optional*, [ID](/guides/configuration-types#id)): The ID of the `si4703` component.
+
+### `si4703.scan` Action
+
+Scans the whole band from the bottom up, recording every station whose signal is at or above the seek threshold (up
+to 32), then returns to the frequency that was playing before the scan. Results are sorted strongest first. Tuning
+manually during a scan cancels it.
+
+```yaml
+on_...:
+  - si4703.scan:
+```
+
+- **id** (*Optional*, [ID](/guides/configuration-types#id)): The ID of the `si4703` component.
+
+## `on_scan_complete` Trigger
+
+Runs when a scan finishes. The results can be read in a lambda with `get_scan_count()`, `get_scan_frequency(i)`
+(MHz) and `get_scan_rssi(i)` (dBµV), where index `0` is the strongest station.
+
+```yaml
+si4703:
+  # ...
+  on_scan_complete:
+    - lambda: |-
+        for (uint8_t i = 0; i < id(radio).get_scan_count(); i++)
+          ESP_LOGI("scan", "%.1f MHz (%u dBuV)", id(radio).get_scan_frequency(i), id(radio).get_scan_rssi(i));
+```
+
+## Lambda Calls
+
+From [lambdas](/automations/templates/#config-lambda), you can call these methods on the component:
+
+- `set_frequency(float mhz)`, `seek_up()`, `seek_down()`, `set_volume(uint8_t volume)`, `set_mute(bool mute)`,
+  `set_mono(bool mono)`, `set_seek_threshold(uint8_t threshold)`, `start_scan()`
+- `get_frequency()`, `get_volume()`, `get_seek_threshold()`, `get_rssi()`, `is_stereo()`, `is_muted()`, `is_mono()`
+- `is_busy()`: `true` while the tuner is starting up, tuning, seeking or scanning. Seeks and scans requested while
+  busy are ignored.
+- `set_station_name_status(const char *text)`: With `status_text` enabled, shows `text` as the station name for the
+  next tune or scan until RDS data replaces it, for example `id(radio).set_station_name_status("Preset 3");` before
+  `id(radio).set_frequency(99.5);`.
+
+## Troubleshooting
+
+- **Not found on the I²C bus:** check that SEN is high, that `sdio_pin` is set to the SDA GPIO, and restart the
+  device after wiring the tuner.
+- **Tune timed out:** the chip responds but never completes a tune. The 32.768 kHz crystal on the board is not
+  oscillating correctly; check or replace it.
+- **No station name or RadioText:** not every station broadcasts RDS, and RDS needs a stronger signal than audio.
+  Improve the antenna (the headphone cord on most breakout boards).
+
+## See Also
+
+- [Si4702/03-C19 Datasheet](https://cdn.sparkfun.com/assets/f/0/9/0/1/Si4702-03-C19-1.pdf)
+- [AN230: Si4700/01/02/03 Programming Guide](https://cdn.sparkfun.com/assets/learn_tutorials/2/7/4/AN230.pdf)
+- [I²C Bus](/components/i2c/)
+- <APIRef text="si4703.h" path="si4703/si4703.h" />

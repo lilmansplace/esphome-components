@@ -11,7 +11,11 @@
 
 namespace esphome::si4703 {
 
-static const char *const TAG = "si4703";
+#ifdef ESPHOME_LOG_TAG
+ESPHOME_LOG_TAG(TAG, "si4703");
+#else  // ESPHome releases before ESPHOME_LOG_TAG (drop for the upstream PR)
+static const char *const TAG = "si4703";  // NOLINT
+#endif
 
 // Register indexes (16-bit registers)
 static constexpr uint8_t REG_DEVICEID = 0x00;
@@ -59,6 +63,7 @@ static constexpr uint16_t ST_ST = 1 << 8;
 static constexpr uint16_t ST_RSSI_MASK = 0x00FF;
 
 // Timing
+static constexpr uint32_t RESET_LOW_MS = 10;
 static constexpr uint32_t POLL_INTERVAL_MS = 20;  // RDS groups arrive every ~88 ms
 // The datasheet advises keeping the bus quiet while a tune/seek runs, as bus activity can disturb the
 // reference oscillator. Tune takes ~60 ms, so poll for STC less often while busy.
@@ -74,14 +79,14 @@ static constexpr uint8_t MAX_INIT_ATTEMPTS = 5;
 
 static constexpr uint8_t RDS_UNCORRECTABLE = 3;
 
-static const char *band_to_str(Band band) {
+static const LogString *band_to_str(Band band) {
   switch (band) {
     case BAND_76_108:
-      return "76-108 MHz";
+      return LOG_STR("76-108 MHz");
     case BAND_76_90:
-      return "76-90 MHz";
+      return LOG_STR("76-90 MHz");
     default:
-      return "87.5-108 MHz";
+      return LOG_STR("87.5-108 MHz");
   }
 }
 
@@ -113,7 +118,7 @@ void Si4703Component::setup() {
 
 void Si4703Component::hardware_reset_() {
   // The Si4702/03 latches its bus mode on the rising edge of RST. 2-wire (I2C) mode requires
-  // SEN high and SDIO low at that moment. Breakout boards usually pull SDIO up, so drive it low.
+  // SEN high and SDIO and GPIO3 low at that moment. Breakout boards usually pull SDIO up, so drive it low.
   this->reset_pin_->setup();
   this->reset_pin_->digital_write(false);
   if (this->sdio_pin_ != nullptr) {
@@ -121,9 +126,11 @@ void Si4703Component::hardware_reset_() {
     this->sdio_pin_->pin_mode(gpio::FLAG_OUTPUT);
     this->sdio_pin_->digital_write(false);
   }
-  delay(1);
+  // Hold RST low long enough for a still-running crystal (e.g. after a soft reboot, when the chip kept
+  // power) to stop: GPIO3 is a crystal pin and must also read low when RST rises.
+  delay(RESET_LOW_MS);
   this->reset_pin_->digital_write(true);
-  delay(1);
+  delay(1);  // keep SDIO low past the rising edge
   if (this->sdio_pin_ != nullptr) {
     this->sdio_pin_->pin_mode(gpio::FLAG_INPUT);  // hand SDIO back to the I2C bus
   }
@@ -202,12 +209,13 @@ void Si4703Component::dump_config() {
                 "Si4703 FM Tuner:\n"
                 "  Band: %s, spacing %.0f kHz, de-emphasis %s\n"
                 "  Initial frequency: %.2f MHz, volume %u",
-                band_to_str(this->band_), this->get_channel_step() * 1000.0f, this->de_50us_ ? "50 us" : "75 us",
-                this->target_frequency_, this->volume_);
+                LOG_STR_ARG(band_to_str(this->band_)), this->get_channel_step() * 1000.0f,
+                this->de_50us_ ? LOG_STR_LITERAL("50 us") : LOG_STR_LITERAL("75 us"), this->target_frequency_,
+                this->volume_);
   LOG_I2C_DEVICE(this);
   if (this->chip_id_ != 0) {
-    ESP_LOGCONFIG(TAG, "  CHIPID: 0x%04X (firmware %u), TEST1 at reset: 0x%04X", this->chip_id_,
-                  this->chip_id_ & 0x3F, this->test1_reset_);
+    ESP_LOGCONFIG(TAG, "  CHIPID: 0x%04X (firmware %u), TEST1 at reset: 0x%04X", this->chip_id_, this->chip_id_ & 0x3F,
+                  this->test1_reset_);
   }
   LOG_PIN("  Reset Pin: ", this->reset_pin_);
   LOG_PIN("  SDIO Pin: ", this->sdio_pin_);
@@ -254,7 +262,8 @@ void Si4703Component::loop() {
       this->stc_rssi_ = this->registers_[REG_STATUSRSSI] & ST_RSSI_MASK;
       this->stc_band_limit_ = !stc || (this->registers_[REG_STATUSRSSI] & ST_SFBL) != 0;
       if (!stc) {
-        ESP_LOGW(TAG, "%s timed out - is the 32.768 kHz crystal oscillating?", seeking ? "Seek" : "Tune");
+        ESP_LOGW(TAG, "%s timed out - is the 32.768 kHz crystal oscillating?",
+                 seeking ? LOG_STR_LITERAL("Seek") : LOG_STR_LITERAL("Tune"));
       } else if (seeking && this->stc_band_limit_ && !this->scanning_) {
         ESP_LOGD(TAG, "Seek found no station above the threshold");
       }
@@ -300,7 +309,7 @@ void Si4703Component::update_from_status_() {
   if (this->last_published_rssi_ < 0 || now - this->last_rssi_publish_ >= RSSI_PUBLISH_INTERVAL_MS) {
     if (this->last_published_rssi_ < 0) {
       ESP_LOGI(TAG, "Tuned to %.2f MHz, RSSI %u dBuV, %s", this->frequency_, this->rssi_,
-               this->stereo_ ? "stereo" : "mono");
+               this->stereo_ ? LOG_STR_LITERAL("stereo") : LOG_STR_LITERAL("mono"));
     }
     this->last_rssi_publish_ = now;
     if (this->rssi_ != this->last_published_rssi_) {
@@ -346,7 +355,7 @@ void Si4703Component::set_frequency(float mhz) {
   const float lo = this->get_band_min();
   const float hi = this->get_band_max();
   if (mhz < lo || mhz > hi) {
-    ESP_LOGW(TAG, "%.2f MHz is outside the %s band", mhz, band_to_str(this->band_));
+    ESP_LOGW(TAG, "%.2f MHz is outside the %s band", mhz, LOG_STR_ARG(band_to_str(this->band_)));
     mhz = std::clamp(mhz, lo, hi);
   }
   this->target_frequency_ = mhz;
@@ -372,7 +381,7 @@ void Si4703Component::start_seek_(bool up) {
     ESP_LOGW(TAG, "Busy, seek ignored");
     return;
   }
-  ESP_LOGD(TAG, "Seeking %s", up ? "up" : "down");
+  ESP_LOGD(TAG, "Seeking %s", up ? LOG_STR_LITERAL("up") : LOG_STR_LITERAL("down"));
   this->issue_seek_(up, false);
 }
 
@@ -396,7 +405,7 @@ void Si4703Component::start_scan() {
     ESP_LOGW(TAG, "Busy, scan ignored");
     return;
   }
-  ESP_LOGI(TAG, "Scanning %s (seek threshold %u dBuV)", band_to_str(this->band_), this->seek_threshold_);
+  ESP_LOGI(TAG, "Scanning %s (seek threshold %u dBuV)", LOG_STR_ARG(band_to_str(this->band_)), this->seek_threshold_);
   this->scanning_ = true;
   this->scan_count_ = 0;
   if (this->status_text_) {
@@ -506,7 +515,8 @@ void Si4703Component::set_mono(bool mono) {
 void Si4703Component::set_seek_threshold(uint8_t threshold) {
   this->seek_threshold_ = threshold > 127 ? 127 : threshold;
   if (this->state_ != State::INIT) {
-    this->registers_[REG_SYSCONFIG2] = (this->registers_[REG_SYSCONFIG2] & 0x00FF) | (uint16_t(this->seek_threshold_) << 8);
+    this->registers_[REG_SYSCONFIG2] =
+        (this->registers_[REG_SYSCONFIG2] & 0x00FF) | (uint16_t(this->seek_threshold_) << 8);
     this->write_registers_();
   }
 #ifdef USE_NUMBER
@@ -633,7 +643,7 @@ void Si4703Component::process_rds_() {
   const uint16_t d = this->registers_[REG_RDSD];
   const uint8_t group = b >> 12;
   const bool version_b = (b >> 11) & 0x01;
-  char text[65];
+  char text[65]{};
 
   if (group == 0) {
     // Programme Service name: 4 segments x 2 characters in block D
@@ -648,14 +658,14 @@ void Si4703Component::process_rds_() {
     this->ps_seen_ = 0;
     trim_copy(this->ps_, 8, text);
     if (text[0] != '\0' && strcmp(text, this->ps_candidate_) == 0 && strcmp(text, this->ps_published_) != 0) {
-      strcpy(this->ps_published_, text);
+      memcpy(this->ps_published_, text, sizeof(this->ps_published_));
       ESP_LOGD(TAG, "RDS station: '%s'", text);
 #ifdef USE_TEXT_SENSOR
       if (this->station_name_text_sensor_ != nullptr)
         this->station_name_text_sensor_->publish_state(text);
 #endif
     }
-    strcpy(this->ps_candidate_, text);
+    memcpy(this->ps_candidate_, text, sizeof(this->ps_candidate_));
   } else if (group == 2) {
     // RadioText: 2A = 16 segments x 4 chars (blocks C+D), 2B = 16 x 2 chars (block D)
     if (bler_d >= RDS_UNCORRECTABLE || (!version_b && bler_c >= RDS_UNCORRECTABLE))
@@ -688,14 +698,14 @@ void Si4703Component::process_rds_() {
     this->rt_seen_ = 0;
     trim_copy(this->rt_, 64, text);
     if (text[0] != '\0' && strcmp(text, this->rt_candidate_) == 0 && strcmp(text, this->rt_published_) != 0) {
-      strcpy(this->rt_published_, text);
+      memcpy(this->rt_published_, text, sizeof(this->rt_published_));
       ESP_LOGD(TAG, "RDS text: '%s'", text);
 #ifdef USE_TEXT_SENSOR
       if (this->radio_text_text_sensor_ != nullptr)
         this->radio_text_text_sensor_->publish_state(text);
 #endif
     }
-    strcpy(this->rt_candidate_, text);
+    memcpy(this->rt_candidate_, text, sizeof(this->rt_candidate_));
   }
 }
 

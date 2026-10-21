@@ -117,9 +117,7 @@ CONFIG_SCHEMA = cv.All(
             ),
             cv.Optional(CONF_ON_SCAN_COMPLETE): automation.validate_automation(
                 {
-                    cv.GenerateID(CONF_TRIGGER_ID): cv.declare_id(
-                        ScanCompleteTrigger
-                    ),
+                    cv.GenerateID(CONF_TRIGGER_ID): cv.declare_id(ScanCompleteTrigger),
                 }
             ),
             cv.Optional(CONF_FREQUENCY, default=87.5): cv.float_range(
@@ -165,14 +163,14 @@ async def to_code(config: ConfigType) -> None:
 TUNE_SCHEMA = cv.Schema(
     {
         cv.GenerateID(): cv.use_id(Si4703Component),
-        cv.Required(CONF_FREQUENCY): cv.templatable(cv.float_range(min=76.0, max=108.0)),
+        cv.Required(CONF_FREQUENCY): cv.templatable(
+            cv.float_range(min=76.0, max=108.0)
+        ),
     }
 )
 
 
-@automation.register_action(
-    "si4703.tune", TuneAction, TUNE_SCHEMA, synchronous=True
-)
+@automation.register_action("si4703.tune", TuneAction, TUNE_SCHEMA, synchronous=True)
 async def tune_to_code(
     config: ConfigType,
     action_id: ID,
@@ -189,9 +187,7 @@ async def tune_to_code(
 SEEK_SCHEMA = maybe_simple_id({cv.GenerateID(): cv.use_id(Si4703Component)})
 
 
-@automation.register_action(
-    "si4703.seek_up", SeekAction, SEEK_SCHEMA, synchronous=True
-)
+@automation.register_action("si4703.seek_up", SeekAction, SEEK_SCHEMA, synchronous=True)
 async def seek_up_to_code(
     config: ConfigType,
     action_id: ID,
@@ -241,9 +237,7 @@ async def set_volume_to_code(
     return var
 
 
-@automation.register_action(
-    "si4703.scan", ScanAction, SEEK_SCHEMA, synchronous=True
-)
+@automation.register_action("si4703.scan", ScanAction, SEEK_SCHEMA, synchronous=True)
 async def scan_to_code(
     config: ConfigType,
     action_id: ID,
