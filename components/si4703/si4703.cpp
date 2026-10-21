@@ -423,10 +423,9 @@ void Si4703Component::finish_scan_() {
     this->scan_results_[j + 1] = item;
   }
   ESP_LOGI(TAG, "Scan complete: %u stations", this->scan_count_);
-  for (uint8_t i = 0; i < this->scan_count_; i++)
-    ESP_LOGD(TAG, "  %.2f MHz  RSSI %u dBuV", this->scan_results_[i].frequency, this->scan_results_[i].rssi);
-  this->scan_complete_callback_.call();
   this->tune_(this->scan_return_frequency_ > 0 ? this->scan_return_frequency_ : this->get_band_min());
+  // Run user automations in their own loop pass so this one stays short
+  this->defer([this]() { this->scan_complete_callback_.call(); });
 }
 
 void Si4703Component::set_volume(uint8_t volume) {
