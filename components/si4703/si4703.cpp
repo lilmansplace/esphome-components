@@ -59,6 +59,9 @@ static constexpr uint16_t ST_RSSI_MASK = 0x00FF;
 
 // Timing
 static constexpr uint32_t POLL_INTERVAL_MS = 20;  // RDS groups arrive every ~88 ms
+// The datasheet advises keeping the bus quiet while a tune/seek runs, as bus activity can disturb the
+// reference oscillator. Tune takes ~60 ms, so poll for STC less often while busy.
+static constexpr uint32_t BUSY_POLL_INTERVAL_MS = 60;
 static constexpr uint32_t RSSI_PUBLISH_INTERVAL_MS = 2000;
 static constexpr uint32_t SETTLE_MS = 500;  // RSSI/stereo settle time after a tune
 static constexpr uint32_t TUNE_TIMEOUT_MS = 500;
@@ -220,7 +223,10 @@ void Si4703Component::loop() {
   if (this->state_ == State::INIT)
     return;
   const uint32_t now = App.get_loop_component_start_time();
-  if (now - this->last_poll_ < POLL_INTERVAL_MS)
+  const bool busy = this->state_ == State::TUNING || this->state_ == State::SEEKING;
+  if (busy && now - this->op_started_ < BUSY_POLL_INTERVAL_MS)
+    return;
+  if (now - this->last_poll_ < (busy ? BUSY_POLL_INTERVAL_MS : POLL_INTERVAL_MS))
     return;
   this->last_poll_ = now;
   if (!this->read_status_())
@@ -238,7 +244,7 @@ void Si4703Component::loop() {
       this->stc_rssi_ = this->registers_[REG_STATUSRSSI] & ST_RSSI_MASK;
       this->stc_band_limit_ = !stc || (this->registers_[REG_STATUSRSSI] & ST_SFBL) != 0;
       if (!stc) {
-        ESP_LOGW(TAG, "%s timed out", seeking ? "Seek" : "Tune");
+        ESP_LOGW(TAG, "%s timed out - is the 32.768 kHz crystal oscillating?", seeking ? "Seek" : "Tune");
       } else if (seeking && this->stc_band_limit_ && !this->scanning_) {
         ESP_LOGD(TAG, "Seek found no station above the threshold");
       }
