@@ -30,6 +30,10 @@
 
 namespace esphome::si4703 {
 
+#ifdef USE_NUMBER
+class Si4703Number;
+#endif
+
 // Si4702/Si4703 FM tuner. Datasheet: Si4702/03-C19; programming guide: Silicon Labs AN230.
 
 enum Band : uint8_t {
@@ -72,9 +76,9 @@ class Si4703Component : public Component, public i2c::I2CDevice {
   SUB_TEXT_SENSOR(radio_text)
 #endif
 #ifdef USE_NUMBER
-  SUB_NUMBER(frequency)
-  SUB_NUMBER(volume)
-  SUB_NUMBER(seek_threshold)
+  void set_frequency_number(Si4703Number *number) { this->frequency_number_ = number; }
+  void set_volume_number(Si4703Number *number) { this->volume_number_ = number; }
+  void set_seek_threshold_number(Si4703Number *number) { this->seek_threshold_number_ = number; }
 #endif
 #ifdef USE_SWITCH
   SUB_SWITCH(mute)
@@ -173,6 +177,12 @@ class Si4703Component : public Component, public i2c::I2CDevice {
   uint16_t registers_[16]{};
 
   State state_{State::INIT};
+#ifdef USE_NUMBER
+  void restore_numbers_();
+  Si4703Number *frequency_number_{nullptr};
+  Si4703Number *volume_number_{nullptr};
+  Si4703Number *seek_threshold_number_{nullptr};
+#endif
   uint16_t chip_id_{0};
   uint16_t test1_reset_{0};
   uint32_t last_poll_{0};

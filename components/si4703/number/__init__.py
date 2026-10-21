@@ -3,6 +3,7 @@ from esphome.components import number
 import esphome.config_validation as cv
 from esphome.const import (
     CONF_FREQUENCY,
+    CONF_RESTORE_VALUE,
     CONF_VOLUME,
     DEVICE_CLASS_FREQUENCY,
     ENTITY_CATEGORY_CONFIG,
@@ -11,9 +12,14 @@ from esphome.types import ConfigType
 
 from .. import CONF_SI4703_ID, Si4703Component, si4703_ns
 
-FrequencyNumber = si4703_ns.class_("FrequencyNumber", number.Number)
-VolumeNumber = si4703_ns.class_("VolumeNumber", number.Number)
-SeekThresholdNumber = si4703_ns.class_("SeekThresholdNumber", number.Number)
+Si4703Number = si4703_ns.class_(
+    "Si4703Number", number.Number, cg.Parented.template(Si4703Component)
+)
+FrequencyNumber = si4703_ns.class_("FrequencyNumber", Si4703Number)
+VolumeNumber = si4703_ns.class_("VolumeNumber", Si4703Number)
+SeekThresholdNumber = si4703_ns.class_("SeekThresholdNumber", Si4703Number)
+
+_RESTORE_SCHEMA = {cv.Optional(CONF_RESTORE_VALUE, default=False): cv.boolean}
 
 CONF_SEEK_THRESHOLD = "seek_threshold"
 
@@ -25,17 +31,17 @@ CONFIG_SCHEMA = cv.Schema(
             unit_of_measurement="MHz",
             device_class=DEVICE_CLASS_FREQUENCY,
             icon="mdi:radio-fm",
-        ),
+        ).extend(_RESTORE_SCHEMA),
         cv.Optional(CONF_VOLUME): number.number_schema(
             VolumeNumber,
             icon="mdi:volume-high",
-        ),
+        ).extend(_RESTORE_SCHEMA),
         cv.Optional(CONF_SEEK_THRESHOLD): number.number_schema(
             SeekThresholdNumber,
             unit_of_measurement="dBµV",
             entity_category=ENTITY_CATEGORY_CONFIG,
             icon="mdi:tune-variant",
-        ),
+        ).extend(_RESTORE_SCHEMA),
     }
 )
 
@@ -48,12 +54,15 @@ async def to_code(config: ConfigType) -> None:
             frequency_config, min_value=76.0, max_value=108.0, step=0.05
         )
         await cg.register_parented(n, config[CONF_SI4703_ID])
+        cg.add(n.set_restore_value(frequency_config[CONF_RESTORE_VALUE]))
         cg.add(parent.set_frequency_number(n))
     if volume_config := config.get(CONF_VOLUME):
         n = await number.new_number(volume_config, min_value=0, max_value=15, step=1)
         await cg.register_parented(n, config[CONF_SI4703_ID])
+        cg.add(n.set_restore_value(volume_config[CONF_RESTORE_VALUE]))
         cg.add(parent.set_volume_number(n))
     if seek_config := config.get(CONF_SEEK_THRESHOLD):
         n = await number.new_number(seek_config, min_value=0, max_value=127, step=1)
         await cg.register_parented(n, config[CONF_SI4703_ID])
+        cg.add(n.set_restore_value(seek_config[CONF_RESTORE_VALUE]))
         cg.add(parent.set_seek_threshold_number(n))

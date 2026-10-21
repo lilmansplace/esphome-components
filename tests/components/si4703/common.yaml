@@ -42,6 +42,7 @@ number:
   - platform: si4703
     frequency:
       name: Frequency
+      restore_value: true
     volume:
       name: Volume
     seek_threshold:

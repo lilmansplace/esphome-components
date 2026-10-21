@@ -14,11 +14,10 @@ esphome:
   on_boot:
     priority: -100
     then:
-      # Values set before the tuner finishes powering up are applied when it does
-      - lambda: |-
-          id(radio).set_seek_threshold(id(last_seek_threshold));
-          id(radio).set_volume(id(last_volume));
-          id(radio).set_frequency(id(last_frequency));
+      # Frequency and volume restore themselves (restore_value on the numbers). The seek threshold
+      # uses a global so auto-program's temporary values are never saved; it is applied when the
+      # tuner finishes powering up.
+      - lambda: 'id(radio).set_seek_threshold(id(last_seek_threshold));'
       - component.update: preset_info
       - component.update: preset_list
 
@@ -37,18 +36,10 @@ i2c:
   scan: true
 
 globals:
-  - id: last_frequency
-    type: float
-    restore_value: true
-    initial_value: '${start_frequency}'
   - id: last_seek_threshold
     type: int
     restore_value: true
     initial_value: '10'
-  - id: last_volume
-    type: int
-    restore_value: true
-    initial_value: '8'
   # One-off station name label for the next tune (e.g. "Preset 3 · FM 99.5"), consumed by the
   # Tuned Frequency sensor below
   - id: station_label
@@ -153,7 +144,6 @@ sensor:
         # Every completed tune: remember it, and show the frequency (or a one-off label such as
         # "Preset 3 · FM 99.5") in Station Name / Radio Text until RDS data replaces it
         - lambda: |-
-            id(last_frequency) = x;
             char freq[16];
             snprintf(freq, sizeof(freq), "FM %.1f", x);
             id(radio_text_display).publish_state(freq);
@@ -244,11 +234,11 @@ number:
     frequency:
       name: "Frequency"
       mode: box
+      restore_value: true      # last station, including seeks, presets and scans
     volume:
       name: "Volume"
       mode: slider
-      on_value:
-        - lambda: 'id(last_volume) = (int) x;'
+      restore_value: true
     seek_threshold:
       name: "Seek Threshold"
       mode: slider

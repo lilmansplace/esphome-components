@@ -137,6 +137,7 @@ number:
   - platform: si4703
     frequency:
       name: "Frequency"
+      restore_value: true
     volume:
       name: "Volume"
     seek_threshold:
@@ -148,6 +149,12 @@ number:
 - **volume** (*Optional*): The volume, from `0` to `15`. All options from [Number](/components/number/).
 - **seek_threshold** (*Optional*): The minimum signal strength (dBµV, `0`–`127`) at which a seek or scan stops on
   a station. Lower values find weaker stations. All options from [Number](/components/number/).
+
+Each number also accepts:
+
+- **restore_value** (*Optional*, boolean): Save the value whenever it changes and apply it again at boot, instead of
+  the configured startup value. For `frequency` this includes stations reached by seeking or scanning, so the tuner
+  comes back on the last station. Defaults to `false`.
 - **si4703_id** (*Optional*, [ID](/guides/configuration-types#id)): The ID of the `si4703` component.
 
 ## Switch

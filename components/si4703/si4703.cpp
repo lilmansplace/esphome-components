@@ -1,5 +1,9 @@
 #include "si4703.h"
 
+#ifdef USE_NUMBER
+#include "number/si4703_number.h"
+#endif
+
 #include "esphome/core/application.h"
 #include "esphome/core/hal.h"
 #include "esphome/core/helpers.h"
@@ -110,11 +114,27 @@ void Si4703Component::setup() {
     this->frequency_number_->traits.set_max_value(this->get_band_max());
     this->frequency_number_->traits.set_step(this->get_channel_step());
   }
+  this->restore_numbers_();
 #endif
   this->hardware_reset_();
   // The I2C bus is initialised after this component; continue once it is up.
   this->set_timeout(50, [this]() { this->init_verify_(); });
 }
+
+#ifdef USE_NUMBER
+void Si4703Component::restore_numbers_() {
+  // Saved values replace the configured startup values; they are applied when the tuner powers up
+  float value;
+  if (this->frequency_number_ != nullptr && this->frequency_number_->load_value(&value) &&
+      value >= this->get_band_min() && value <= this->get_band_max())
+    this->target_frequency_ = value;
+  if (this->volume_number_ != nullptr && this->volume_number_->load_value(&value) && value >= 0.0f && value <= 15.0f)
+    this->volume_ = static_cast<uint8_t>(value);
+  if (this->seek_threshold_number_ != nullptr && this->seek_threshold_number_->load_value(&value) && value >= 0.0f &&
+      value <= 127.0f)
+    this->seek_threshold_ = static_cast<uint8_t>(value);
+}
+#endif
 
 void Si4703Component::hardware_reset_() {
   // The Si4702/03 latches its bus mode on the rising edge of RST. 2-wire (I2C) mode requires
@@ -191,9 +211,9 @@ void Si4703Component::init_finish_() {
   ESP_LOGI(TAG, "Powered up (CHIPID 0x%04X)", this->registers_[REG_CHIPID]);
 #ifdef USE_NUMBER
   if (this->volume_number_ != nullptr)
-    this->volume_number_->publish_state(this->volume_);
+    this->volume_number_->publish_and_save(this->volume_);
   if (this->seek_threshold_number_ != nullptr)
-    this->seek_threshold_number_->publish_state(this->seek_threshold_);
+    this->seek_threshold_number_->publish_and_save(this->seek_threshold_);
 #endif
 #ifdef USE_SWITCH
   if (this->mute_switch_ != nullptr)
@@ -340,7 +360,7 @@ void Si4703Component::publish_tuned_() {
 #endif
 #ifdef USE_NUMBER
   if (this->frequency_number_ != nullptr)
-    this->frequency_number_->publish_state(this->frequency_);
+    this->frequency_number_->publish_and_save(this->frequency_);
 #endif
 }
 
@@ -461,7 +481,7 @@ void Si4703Component::set_volume(uint8_t volume) {
   }
 #ifdef USE_NUMBER
   if (this->volume_number_ != nullptr)
-    this->volume_number_->publish_state(this->volume_);
+    this->volume_number_->publish_and_save(this->volume_);
 #endif
 }
 
@@ -506,7 +526,7 @@ void Si4703Component::set_seek_threshold(uint8_t threshold) {
   }
 #ifdef USE_NUMBER
   if (this->seek_threshold_number_ != nullptr)
-    this->seek_threshold_number_->publish_state(this->seek_threshold_);
+    this->seek_threshold_number_->publish_and_save(this->seek_threshold_);
 #endif
 }
 
