@@ -3,8 +3,8 @@
 #   sdio_pin, sclk_pin, reset_pin, start_frequency
 # Optional: region (americas | europe | australia | japan | japan_wide), default americas.
 # Provides: tuning, volume, mute/mono, seek, RDS station name + text, signal strength,
-# 6 presets (drop-down + Tune/Store/Next/Previous), "Auto-program Presets" (band scan,
-# strongest 6 stations), and restores last station/volume/seek threshold on boot.
+# 6 presets (drop-down + Tune/Store/Next/Previous), "Auto-program Presets" (adaptive band scan,
+# strongest 6 stations), "Scan Band" (scan only), and restores last station/volume/seek threshold.
 
 substitutions:
   region: americas
@@ -48,6 +48,16 @@ globals:
     type: int
     restore_value: true
     initial_value: '8'
+  # Auto-program state (not persisted)
+  - id: autoprog_active
+    type: bool
+    initial_value: 'false'
+  - id: autoprog_saved_threshold
+    type: int
+    initial_value: '10'
+  - id: autoprog_threshold
+    type: int
+    initial_value: '10'
   - id: presets
     type: std::array<float, 6>
     restore_value: true
@@ -63,25 +73,67 @@ si4703:
   frequency: ${start_frequency}
   volume: 8
   on_scan_complete:
-    - lambda: |-
-        const uint8_t n = id(radio).get_scan_count();
-        if (n == 0) {
-          ESP_LOGW("preset", "Scan found no stations - presets unchanged (try a lower Seek Threshold)");
-          return;
-        }
-        // Results arrive strongest first; keep the top 6, then order them by frequency
-        const uint8_t k = n < 6 ? n : 6;
-        std::array<float, 6> top{};
-        for (uint8_t i = 0; i < k; i++)
-          top[i] = id(radio).get_scan_frequency(i);
-        std::sort(top.begin(), top.begin() + k);
-        for (uint8_t i = 0; i < k; i++) {
-          id(presets)[i] = top[i];
-          ESP_LOGI("preset", "Preset %u = %.1f MHz", (unsigned) (i + 1), top[i]);
-        }
-    - component.update: preset_info
-    - component.update: preset_list
     - component.update: scan_results
+    - if:
+        condition:
+          lambda: 'return id(autoprog_active);'
+        then:
+          - script.execute: autoprog_step
+
+script:
+  # One step of Auto-program: runs after each scan. Lowers the seek threshold and rescans until
+  # 6 stations are found (or the threshold reaches 0), then writes the presets.
+  - id: autoprog_step
+    mode: queued
+    then:
+      - wait_until:
+          condition:
+            lambda: 'return !id(radio).is_busy();'
+          timeout: 5s
+      - lambda: |-
+          const uint8_t n = id(radio).get_scan_count();
+          if (n < 6 && id(autoprog_threshold) > 0) {
+            id(autoprog_threshold) = std::max(0, id(autoprog_threshold) - 4);
+            ESP_LOGI("autoprog", "Found %u station(s); rescanning at seek threshold %d", n, id(autoprog_threshold));
+            id(radio).set_seek_threshold(id(autoprog_threshold));
+            id(radio).start_scan();
+            return;
+          }
+          id(autoprog_active) = false;
+          id(radio).set_seek_threshold(id(autoprog_saved_threshold));
+          id(autoprog_watchdog).stop();
+          if (n == 0) {
+            ESP_LOGW("autoprog", "Auto-program failed: no stations found - presets unchanged");
+            return;
+          }
+          // Results arrive strongest first: keep the best 6, order them by frequency, and repeat
+          // stations to fill the slots if fewer than 6 were found.
+          const uint8_t k = n < 6 ? n : 6;
+          std::array<float, 6> top{};
+          for (uint8_t i = 0; i < k; i++)
+            top[i] = id(radio).get_scan_frequency(i);
+          std::sort(top.begin(), top.begin() + k);
+          for (uint8_t i = 0; i < 6; i++) {
+            id(presets)[i] = top[i % k];
+            ESP_LOGI("autoprog", "Preset %u = %.1f MHz", (unsigned) (i + 1), id(presets)[i]);
+          }
+          if (k < 6)
+            ESP_LOGW("autoprog", "Only %u station(s) found; repeated them to fill all 6 presets", k);
+          id(preset_info).update();
+          id(preset_list).update();
+
+  # Safety net: if an auto-program run is interrupted (e.g. a manual tune cancels the scan),
+  # put the user's seek threshold back.
+  - id: autoprog_watchdog
+    mode: restart
+    then:
+      - delay: 120s
+      - lambda: |-
+          if (id(autoprog_active)) {
+            id(autoprog_active) = false;
+            id(radio).set_seek_threshold(id(autoprog_saved_threshold));
+            ESP_LOGW("autoprog", "Auto-program interrupted - presets unchanged");
+          }
 
 sensor:
   - platform: si4703
@@ -161,7 +213,9 @@ number:
       name: "Seek Threshold"
       mode: slider
       on_value:
-        - lambda: 'id(last_seek_threshold) = (int) x;'
+        - lambda: |-
+            if (!id(autoprog_active))   // don't persist the temporary auto-program values
+              id(last_seek_threshold) = (int) x;
 
 switch:
   - platform: si4703
@@ -195,7 +249,28 @@ button:
     seek_down:
       name: "Seek Down"
     scan:
-      name: "Auto-program Presets"
+      name: "Scan Band"
+
+  - platform: template
+    name: "Auto-program Presets"
+    icon: mdi:playlist-star
+    on_press:
+      - if:
+          condition:
+            lambda: 'return id(autoprog_active) || id(radio).is_busy();'
+          then:
+            - logger.log:
+                level: WARN
+                tag: autoprog
+                format: "Radio busy - auto-program ignored"
+          else:
+            - lambda: |-
+                id(autoprog_active) = true;
+                id(autoprog_saved_threshold) = id(radio).get_seek_threshold();
+                id(autoprog_threshold) = id(autoprog_saved_threshold);
+                ESP_LOGI("autoprog", "Auto-programming presets (seek threshold %d)", id(autoprog_threshold));
+                id(radio).start_scan();
+            - script.execute: autoprog_watchdog
 
   - platform: template
     name: "Tune Preset"

@@ -115,6 +115,8 @@ class Si4703Component : public Component, public i2c::I2CDevice {
   // Results are sorted strongest first; the previous frequency is restored when the scan ends.
   void start_scan();
   bool is_scanning() const { return this->scanning_; }
+  /// True while initialising, tuning, seeking or scanning (new commands would be ignored)
+  bool is_busy() const { return this->state_ != State::IDLE || this->scanning_; }
   uint8_t get_scan_count() const { return this->scan_count_; }
   float get_scan_frequency(uint8_t index) const {
     return index < this->scan_count_ ? this->scan_results_[index].frequency : 0.0f;
