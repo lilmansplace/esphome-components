@@ -291,8 +291,9 @@ button:
     scan:
       name: "Scan Band"
       on_press:
+        # Runs after the button has started the scan
         - lambda: |-
-            if (id(radio).is_busy()) return;
+            if (!id(radio).is_scanning()) return;
             id(station_name_display).publish_state("Scanning\u2026");
             id(radio_text_display).publish_state("Scanning\u2026");
 
